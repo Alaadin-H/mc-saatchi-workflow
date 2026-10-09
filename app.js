@@ -4,12 +4,46 @@
  * ============================================================================
  */
 
+// Application Defaults & Fallbacks
+const FALLBACK_CONFIG = {
+  taskTypes: [
+    "Photos", "Video", "Design", "Carousel Photos",
+    "Carousel Video", "Match Coverage", "Script", "Presentation"
+  ],
+  graphicSizes: [
+    "Reel 9:16", "Wide 16:9", "Square 1:1", "Portrait 3:4", "Portrait 4:5"
+  ],
+  clients: [
+    "MINNOWS", "Palm Hills", "APT Padel", "Potential Client / Pitching"
+  ],
+  priorities: [
+    "Low", "Medium", "High", "Urgent"
+  ],
+  statuses: [
+    "Not Started", "Work in Progress", "Submitted for Review", "Completed"
+  ],
+  taskCategories: [
+    "New Task", "Existing Task"
+  ],
+  departments: [
+    "Social", "Marketing"
+  ]
+};
+
+const FALLBACK_SUPABASE = {
+  url: 'https://ldsevaytazsnfvsdxrno.supabase.co',
+  anonKey: 'sb_publishable_W2y6fRzN9rJRN_Gn0wRXBA_dD4ybYRv'
+};
+
 // Application State
 let supabaseClient = null;
 let isConnected = false;
 let tasks = [];
 let filteredTasks = [];
-let config = JSON.parse(JSON.stringify(window.DEFAULT_CONFIG || {}));
+let config = Object.assign({}, FALLBACK_CONFIG, window.DEFAULT_CONFIG || {});
+if (!config.statuses || !Array.isArray(config.statuses) || !config.statuses.length) {
+  config.statuses = FALLBACK_CONFIG.statuses.slice();
+}
 let activeView = 'board';
 let currentTaskId = null; // internal UUID or ID
 let sortCol = 'taskId';
@@ -218,8 +252,8 @@ function isTaskOverdue(t) {
 /* SUPABASE CLIENT & INITIALIZATION                                           */
 /* -------------------------------------------------------------------------- */
 function getSupabaseCredentials() {
-  const storedUrl = localStorage.getItem('sb_url') || (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url);
-  const storedKey = localStorage.getItem('sb_key') || (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.anonKey);
+  const storedUrl = localStorage.getItem('sb_url') || (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url) || FALLBACK_SUPABASE.url;
+  const storedKey = localStorage.getItem('sb_key') || (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.anonKey) || FALLBACK_SUPABASE.anonKey;
   let cleanUrl = String(storedUrl || '').trim();
   cleanUrl = cleanUrl.replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
   return {
@@ -474,17 +508,24 @@ function normStatus(s) {
 
 function boardStatusOf(t) {
   const n = normStatus(t.status);
-  for (let i = 0; i < config.statuses.length; i++) {
-    if (normStatus(config.statuses[i]) === n) return config.statuses[i];
+  const statuses = (config && Array.isArray(config.statuses) && config.statuses.length)
+    ? config.statuses
+    : FALLBACK_CONFIG.statuses;
+  for (let i = 0; i < statuses.length; i++) {
+    if (normStatus(statuses[i]) === n) return statuses[i];
   }
   return 'Other';
 }
 
 function renderBoard() {
   const container = $('view-board');
+  if (!container) return;
   container.innerHTML = '';
 
-  const columns = config.statuses.slice();
+  const statusList = (config && Array.isArray(config.statuses) && config.statuses.length)
+    ? config.statuses
+    : FALLBACK_CONFIG.statuses;
+  const columns = statusList.slice();
   if (filteredTasks.some((t) => boardStatusOf(t) === 'Other')) {
     columns.push('Other');
   }
