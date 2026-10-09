@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MC Saatchi Workflow</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Supabase Official JS Client from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+  <!-- Notice Banner for Setup -->
+  <div id="setup-banner" class="notice-banner warning" style="display:none;">
+    <span>⚡ <strong>Demo Mode Active:</strong> You are currently using local demo data. Connect your free Supabase project to enable live cloud sync and teamwork.</span>
+    <button type="button" class="btn btn-warning" onclick="openSettingsModal()" style="padding:4px 10px;font-size:12px;">Connect Supabase</button>
+  </div>
+
+  <!-- Header Bar -->
+  <header class="header-bar">
+    <div class="header-left">
+      <div class="header-title">M&amp;C Saatchi Workflow</div>
+      <div id="conn-badge" class="conn-badge demo" onclick="openSettingsModal()" title="Click to configure Supabase">
+        <span class="conn-dot"></span>
+        <span id="conn-status-text">Checking Supabase...</span>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button type="button" class="btn btn-secondary" onclick="openSettingsModal()">⚙️ Settings</button>
+      <button type="button" class="btn btn-secondary" onclick="refreshData()">🔄 Refresh</button>
+      <button type="button" class="btn btn-primary" onclick="openNewTask()">+ New Task</button>
+    </div>
+  </header>
+
+  <!-- Summary Metrics Grid -->
+  <section class="summary-grid">
+    <div class="metric-card">
+      <div class="metric-label">Total Tasks</div>
+      <div class="metric-val" id="count-total">0</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">In Progress</div>
+      <div class="metric-val" id="count-wip">0</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Review Ready</div>
+      <div class="metric-val" id="count-review">0</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Completed</div>
+      <div class="metric-val" id="count-completed">0</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Overdue</div>
+      <div class="metric-val metric-overdue" id="count-overdue">0</div>
+    </div>
+  </section>
+
+  <!-- Filters -->
+  <section class="filter-card">
+    <div class="filter-grid">
+      <div class="filter-item">
+        <input type="text" id="filter-search" placeholder="Search task name or ID..." oninput="applyFilters()">
+      </div>
+      <div class="filter-item">
+        <select id="filter-client" onchange="applyFilters()"><option value="">All Clients</option></select>
+      </div>
+      <div class="filter-item">
+        <select id="filter-dept" onchange="applyFilters()"><option value="">All Depts</option></select>
+      </div>
+      <div class="filter-item">
+        <select id="filter-category" onchange="applyFilters()"><option value="">All Categories</option></select>
+      </div>
+      <div class="filter-item">
+        <select id="filter-type" onchange="applyFilters()"><option value="">All Task Types</option></select>
+      </div>
+      <div class="filter-item">
+        <select id="filter-status" onchange="applyFilters()"><option value="">All Statuses</option></select>
+      </div>
+      <div class="filter-item">
+        <select id="filter-priority" onchange="applyFilters()"><option value="">All Priorities</option></select>
+      </div>
+      <div class="filter-item">
+        <input type="text" id="filter-assigned" placeholder="Assigned to..." oninput="applyFilters()">
+      </div>
+      <div style="text-align:right;">
+        <button type="button" class="filter-reset-btn" onclick="resetFilters()">Reset Filters</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- View Switcher -->
+  <nav class="view-switcher">
+    <button type="button" class="tab-btn active" id="btn-tab-board" onclick="switchView('board')">📋 Board View</button>
+    <button type="button" class="tab-btn" id="btn-tab-table" onclick="switchView('table')">📊 Table View</button>
+    <button type="button" class="tab-btn" id="btn-tab-timeline" onclick="switchView('timeline')">📅 Timeline View</button>
+  </nav>
+
+  <!-- Main View Containers -->
+  <main>
+    <!-- Kanban Board -->
+    <div id="view-board" class="kanban-board"></div>
+
+    <!-- Table View -->
+    <div id="view-table" class="table-container" style="display:none;">
+      <table>
+        <thead>
+          <tr>
+            <th onclick="sortTable('taskId')">Task ID <span id="sort-taskId"></span></th>
+            <th onclick="sortTable('taskName')">Task Name <span id="sort-taskName"></span></th>
+            <th onclick="sortTable('department')">Department <span id="sort-department"></span></th>
+            <th onclick="sortTable('taskCategory')">Category <span id="sort-taskCategory"></span></th>
+            <th onclick="sortTable('client')">Client <span id="sort-client"></span></th>
+            <th onclick="sortTable('taskType')">Type <span id="sort-taskType"></span></th>
+            <th onclick="sortTable('graphicSize')">Size <span id="sort-graphicSize"></span></th>
+            <th onclick="sortTable('priority')">Priority <span id="sort-priority"></span></th>
+            <th onclick="sortTable('status')">Status <span id="sort-status"></span></th>
+            <th onclick="sortTable('assignedTo')">Assigned <span id="sort-assignedTo"></span></th>
+            <th onclick="sortTable('dueDate')">Due Date <span id="sort-dueDate"></span></th>
+            <th onclick="sortTable('postingDate')">Posting Date <span id="sort-postingDate"></span></th>
+            <th>Materials</th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+
+    <!-- Timeline View -->
+    <div id="view-timeline" class="timeline-container" style="display:none;">
+      <div id="timeline-list"></div>
+    </div>
+  </main>
+
+  <!-- Task Details / Form Modal -->
+  <div class="modal-overlay" id="task-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-title" id="modal-title">Task Details</div>
+        <button type="button" class="btn btn-secondary" onclick="closeModal()" style="padding:4px 10px;">✕</button>
+      </div>
+
+      <form id="task-form" onsubmit="handleFormSubmit(event)">
+        <input type="hidden" id="form-id">
+        <input type="hidden" id="form-task-id">
+
+        <div class="form-grid" id="modal-form-fields">
+          <div class="form-group full-width">
+            <label>Task Name *</label>
+            <input type="text" id="form-name" required placeholder="Campaign teaser clip, product ad, etc.">
+          </div>
+
+          <div class="form-group full-width">
+            <label>Task Description / Brief</label>
+            <textarea id="form-description" rows="2" placeholder="Add specs or general direction..."></textarea>
+          </div>
+
+          <div class="form-group full-width">
+            <label>Copy Message (Text on Video/Design)</label>
+            <textarea id="form-copy" rows="2" placeholder="Exact text to include in the design or video..."></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>Department *</label>
+            <select id="form-dept" required></select>
+          </div>
+
+          <div class="form-group">
+            <label>Task Category *</label>
+            <select id="form-category" required></select>
+          </div>
+
+          <div class="form-group">
+            <label>Task Owner</label>
+            <input type="text" id="form-owner" placeholder="Creator or requester name">
+          </div>
+
+          <div class="form-group">
+            <label>Assigned To</label>
+            <input type="text" id="form-assigned" placeholder="Editor / designer name">
+          </div>
+
+          <div class="form-group">
+            <label>Client</label>
+            <select id="form-client"></select>
+          </div>
+
+          <div class="form-group">
+            <label>Task Type</label>
+            <select id="form-type"></select>
+          </div>
+
+          <div class="form-group">
+            <label>Graphic Size</label>
+            <select id="form-size"></select>
+          </div>
+
+          <div class="form-group">
+            <label>Priority</label>
+            <select id="form-priority"></select>
+          </div>
+
+          <div class="form-group">
+            <label>Status</label>
+            <select id="form-status"></select>
+          </div>
+
+          <div class="form-group">
+            <label>Due Date</label>
+            <input type="date" id="form-due">
+          </div>
+
+          <div class="form-group">
+            <label>Posting Date</label>
+            <input type="date" id="form-posting">
+          </div>
+
+          <!-- Links Section -->
+          <div class="form-group full-width link-box">
+            <label>Brand Guideline Link &amp; Note</label>
+            <input type="text" id="form-brand-link" placeholder="https://drive.google.com/...">
+            <input type="text" id="form-brand-note" placeholder="Notes for Brand Guideline..." style="margin-top:6px;">
+          </div>
+
+          <div class="form-group full-width link-box">
+            <label>Reference Link &amp; Note</label>
+            <input type="text" id="form-reference" placeholder="https://instagram.com/p/...">
+            <input type="text" id="form-reference-note" placeholder="Notes for Reference Link..." style="margin-top:6px;">
+          </div>
+
+          <div class="form-group full-width link-box">
+            <label>Source Materials Link &amp; Note</label>
+            <input type="text" id="form-source" placeholder="https://dropbox.com/folder/...">
+            <input type="text" id="form-source-note" placeholder="Notes for Source Materials..." style="margin-top:6px;">
+          </div>
+
+          <div class="form-group full-width link-box">
+            <label>Finished Task Link &amp; Note</label>
+            <input type="text" id="form-finished" placeholder="https://drive.google.com/file/...">
+            <input type="text" id="form-finished-note" placeholder="Notes for Finished Task..." style="margin-top:6px;">
+          </div>
+
+          <div class="form-group full-width open-links" id="open-links"></div>
+        </div>
+
+        <div class="modal-actions">
+          <div>
+            <button type="button" class="btn btn-danger" id="btn-delete-task" onclick="handleDeleteTask()" style="display:none;">🗑️ Delete Task</button>
+          </div>
+          <div class="modal-actions-right">
+            <button type="button" class="btn btn-secondary" onclick="closeModal()">Close</button>
+            <button type="button" class="btn btn-warning" id="btn-edit-mode" onclick="enableEditMode()">✏️ Edit Task</button>
+            <button type="submit" class="btn btn-primary" id="btn-save-task">Save Task</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Supabase Settings Modal -->
+  <div class="modal-overlay" id="settings-modal">
+    <div class="modal-content" style="max-width:580px;">
+      <div class="modal-header">
+        <div class="modal-title">⚡ Supabase Database Setup</div>
+        <button type="button" class="btn btn-secondary" onclick="closeSettingsModal()" style="padding:4px 10px;">✕</button>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <p style="color:var(--muted);font-size:13px;line-height:1.5;">
+          Connect your project to <strong>Supabase</strong> to enable free cloud storage, real-time collaboration, and automatic task ID generation.
+        </p>
+
+        <div class="form-group">
+          <label>Supabase Project URL</label>
+          <input type="text" id="setting-supabase-url" placeholder="https://your-project-id.supabase.co">
+        </div>
+
+        <div class="form-group">
+          <label>Supabase Anon Public API Key</label>
+          <input type="password" id="setting-supabase-key" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:4px;">
+          <button type="button" class="btn btn-secondary" onclick="testSupabaseConnection()">🔌 Test Connection</button>
+          <button type="button" class="btn btn-primary" onclick="saveSupabaseSettings()">💾 Save &amp; Connect</button>
+        </div>
+
+        <div id="conn-test-result" style="display:none;font-size:12px;padding:8px 12px;border-radius:6px;"></div>
+
+        <hr style="border:none;border-top:1px solid var(--border);margin:10px 0;">
+
+        <div style="font-size:13px;">
+          <strong>Quick Setup Steps:</strong>
+          <ol style="margin-left:20px;margin-top:6px;line-height:1.6;color:var(--muted);">
+            <li>Create a free account and project at <a href="https://supabase.com" target="_blank" rel="noopener">supabase.com</a>.</li>
+            <li>In Supabase, open the <strong>SQL Editor</strong> tab on the left.</li>
+            <li>Copy the contents of <code>supabase-schema.sql</code> and click <strong>Run</strong>.</li>
+            <li>Go to <strong>Project Settings &rarr; API</strong>, copy your <strong>Project URL</strong> and <strong>anon public key</strong>, and paste them above.</li>
+          </ol>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+          <button type="button" class="btn btn-ghost" onclick="clearSupabaseSettings()">Reset to Demo Mode</button>
+          <button type="button" class="btn btn-secondary" onclick="closeSettingsModal()">Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast">Action completed</div>
+
+  <!-- App Scripts -->
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
