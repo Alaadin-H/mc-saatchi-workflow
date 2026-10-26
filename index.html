@@ -8,10 +8,10 @@
   <!-- Supabase Official JS Client from CDN -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
-<body>
+<body class="role-team">
 
   <!-- Notice Banner for Setup -->
-  <div id="setup-banner" class="notice-banner warning" style="display:none;">
+  <div id="setup-banner" class="notice-banner warning admin-only" style="display:none;">
     <span>⚡ <strong>Demo Mode Active:</strong> You are currently using local demo data. Connect your free Supabase project to enable live cloud sync and teamwork.</span>
     <button type="button" class="btn btn-warning" onclick="openSettingsModal()" style="padding:4px 10px;font-size:12px;">Connect Supabase</button>
   </div>
@@ -20,13 +20,13 @@
   <header class="header-bar">
     <div class="header-left">
       <div class="header-title">M&amp;C Saatchi Workflow</div>
-      <div id="conn-badge" class="conn-badge demo" onclick="openSettingsModal()" title="Click to configure Supabase">
+      <div id="conn-badge" class="conn-badge demo" onclick="openSettingsModal()" title="Connection status" style="display:none;">
         <span class="conn-dot"></span>
         <span id="conn-status-text">Checking Supabase...</span>
       </div>
     </div>
     <div class="header-actions">
-      <button type="button" class="btn btn-secondary" onclick="openSettingsModal()">⚙️ Settings</button>
+      <button type="button" class="btn btn-secondary admin-only" onclick="openSettingsModal()">⚙️ Settings</button>
       <button type="button" class="btn btn-secondary" onclick="refreshData()">🔄 Refresh</button>
       <button type="button" class="btn btn-primary" onclick="openNewTask()">+ New Task</button>
     </div>
@@ -264,7 +264,7 @@
   </div>
 
   <!-- Supabase Settings Modal -->
-  <div class="modal-overlay" id="settings-modal">
+  <div class="modal-overlay admin-only" id="settings-modal">
     <div class="modal-content" style="max-width:580px;">
       <div class="modal-header">
         <div class="modal-title">⚡ Supabase Database Setup</div>

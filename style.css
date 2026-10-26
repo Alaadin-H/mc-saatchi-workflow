@@ -853,3 +853,6 @@ td a.link-chip:hover {
   text-decoration: none;
 }
 .rev-actions a:hover { text-decoration: underline; }
+
+/* ---------- Team vs admin pages ---------- */
+.role-team .admin-only { display: none !important; }

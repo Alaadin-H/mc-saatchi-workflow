@@ -303,8 +303,11 @@ function setConnectionState(connected, text) {
   const badgeText = $('conn-status-text');
   const banner = $('setup-banner');
 
-  badgeText.textContent = text;
+  // Connected: show nothing. Not connected: show a clear warning so nobody
+  // thinks their changes were saved to the cloud.
+  badgeText.textContent = connected ? '' : text + ' – changes stay on this device only';
   badge.className = 'conn-badge ' + (connected ? 'connected' : 'demo');
+  badge.style.display = connected ? 'none' : '';
   banner.style.display = connected ? 'none' : 'flex';
 }
 
@@ -1019,6 +1022,7 @@ function closeModal() {
 /* SETTINGS MODAL & SUPABASE CONFIG                                           */
 /* -------------------------------------------------------------------------- */
 function openSettingsModal() {
+  if (document.body.classList.contains('role-team')) return; // Settings is admin-only
   const creds = getSupabaseCredentials();
   $('setting-supabase-url').value = creds.url;
   $('setting-supabase-key').value = creds.key;
