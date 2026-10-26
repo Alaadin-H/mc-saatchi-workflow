@@ -49,6 +49,11 @@ let currentTaskId = null; // internal UUID or ID
 let sortCol = 'taskId';
 let sortAsc = true;
 let realtimeChannel = null;
+let revChannel = null;
+let revisions = {};        // taskId -> [saved edits]
+let revisionsReady = true; // false when the task_revisions table is missing
+let revDraft = null;       // unsaved new edit for the open task
+let revDirty = false;      // user is typing in the Edits panel
 
 // DOM Helper
 const $ = (id) => document.getElementById(id);
@@ -315,6 +320,15 @@ function setupRealtimeSubscription() {
         refreshData(true); // silent refresh
       })
       .subscribe();
+
+    // Separate channel so a problem with edits can never affect task updates
+    if (revChannel) supabaseClient.removeChannel(revChannel);
+    revChannel = supabaseClient
+      .channel('revisions-live-channel')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'task_revisions' }, () => {
+        refreshData(true);
+      })
+      .subscribe();
   } catch (err) {
     console.warn('Realtime subscribe warning:', err);
   }
@@ -349,7 +363,9 @@ function loadDemoTasks() {
     tasks = DEMO_TASKS.slice();
     localStorage.setItem('demo_tasks', JSON.stringify(tasks));
   }
+  loadRevisionsLocal();
   applyFilters();
+  refreshRevisionPanel();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -375,7 +391,9 @@ async function refreshData(silent = false) {
         return item;
       });
 
+      await loadRevisions();
       applyFilters();
+      refreshRevisionPanel();
       if (!silent) showToast(`Synced ${tasks.length} tasks from Supabase`, 'success');
       return;
     } catch (err) {
@@ -589,6 +607,8 @@ function renderBoard() {
       if (t.graphicSize) meta.appendChild(el('span', 'tag tag-size', t.graphicSize));
       if (t.department) meta.appendChild(el('span', 'tag tag-dept', t.department));
       if (t.priority) meta.appendChild(el('span', 'tag tag-prio-' + t.priority, t.priority));
+      const nEdits = (revisions[t.taskId] || []).length;
+      if (nEdits) meta.appendChild(el('span', 'tag tag-edit', '✎ ' + nEdits + (nEdits > 1 ? ' edits' : ' edit')));
       card.appendChild(meta);
 
       // Footer
@@ -887,6 +907,8 @@ async function handleDeleteTask() {
     } else {
       tasks = tasks.filter((t) => t.id !== currentTaskId && t.taskId !== currentTaskId);
       localStorage.setItem('demo_tasks', JSON.stringify(tasks));
+      delete revisions[task.taskId];
+      localStorage.setItem('demo_revisions', JSON.stringify(revisions));
     }
 
     closeModal();
@@ -924,6 +946,9 @@ function openNewTask() {
   $('form-category').value = 'New Task';
   $('form-dept').value = 'Social';
   $('modal-title').textContent = '+ New Task';
+  revDraft = null;
+  revDirty = false;
+  $('rev-section').style.display = 'none';
 
   setFormDisabled(false);
   $('task-modal').classList.add('active');
@@ -972,6 +997,11 @@ function openTaskModal(identifier) {
   });
 
   setFormDisabled(true);
+  revDraft = null;
+  revDirty = false;
+  $('rev-section').style.display = 'block';
+  $('rev-section').open = false;
+  renderRevisions(t.taskId);
   $('task-modal').classList.add('active');
 }
 
@@ -981,6 +1011,8 @@ function enableEditMode() {
 
 function closeModal() {
   $('task-modal').classList.remove('active');
+  revDraft = null;
+  revDirty = false;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1067,6 +1099,202 @@ function clearSupabaseSettings() {
   showToast('Cleared Supabase credentials. Switched to Demo Mode.', 'info');
   closeSettingsModal();
   initSupabase();
+}
+
+/* -------------------------------------------------------------------------- */
+/* EDITS / REVISIONS (a task can have many)                                   */
+/* -------------------------------------------------------------------------- */
+function loadRevisionsLocal() {
+  try {
+    revisions = JSON.parse(localStorage.getItem('demo_revisions') || '{}') || {};
+  } catch (e) {
+    revisions = {};
+  }
+  revisionsReady = true;
+}
+
+async function loadRevisions() {
+  if (!(isConnected && supabaseClient)) { loadRevisionsLocal(); return; }
+  const { data, error } = await supabaseClient
+    .from('task_revisions')
+    .select('*')
+    .order('revision_no', { ascending: true });
+
+  if (error) {
+    console.warn('Edits not available:', error);
+    revisionsReady = false;
+    revisions = {};
+    return;
+  }
+  revisionsReady = true;
+  revisions = {};
+  (data || []).forEach((r) => {
+    (revisions[r.task_id] = revisions[r.task_id] || []).push(r);
+  });
+}
+
+function openTaskIdInModal() {
+  return $('form-task-id').value || '';
+}
+
+function refreshRevisionPanel() {
+  if (!$('task-modal').classList.contains('active')) return;
+  const tid = openTaskIdInModal();
+  if (!tid || revDirty) return; // do not wipe what the user is typing
+  renderRevisions(tid);
+}
+
+function formatTs(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear();
+}
+
+function renderRevisions(taskId) {
+  const box = $('rev-list');
+  box.innerHTML = '';
+  const saved = revisions[taskId] || [];
+  $('rev-summary').textContent = 'Edits (' + saved.length + ')';
+  $('btn-add-edit').style.display = revisionsReady ? 'inline-flex' : 'none';
+
+  if (!revisionsReady) {
+    box.appendChild(el('div', 'empty', 'Edits are not set up yet. Run supabase-add-revisions.sql in the Supabase SQL Editor, then refresh.'));
+    return;
+  }
+
+  const items = saved.slice();
+  if (revDraft) items.push(revDraft);
+  if (!items.length) {
+    box.appendChild(el('div', 'empty', 'No edits yet. Click "+ Add Edit" when the owner sends notes.'));
+    return;
+  }
+
+  items.forEach((r) => {
+    const isDraft = r === revDraft;
+    const card = el('div', 'rev-card');
+
+    const head = el('div', 'rev-head');
+    head.appendChild(el('span', '', isDraft ? 'New edit' : 'Edit #' + r.revision_no));
+    if (!isDraft && r.created_at) head.appendChild(el('span', 'rev-meta', formatTs(r.created_at)));
+    card.appendChild(head);
+
+    const mk = (label, tag, value, ph) => {
+      const wrap = el('div');
+      wrap.appendChild(el('label', '', label));
+      const f = el(tag);
+      if (tag === 'input') f.type = 'text';
+      f.value = value || '';
+      f.placeholder = ph;
+      f.addEventListener('input', () => { revDirty = true; });
+      wrap.appendChild(f);
+      card.appendChild(wrap);
+      return f;
+    };
+
+    const fOwner = mk('Owner Note (what needs to change)', 'textarea', r.owner_note, 'Feedback or requested changes...');
+    const fLink = mk('New Delivery Link', 'input', r.delivery_link, 'https://drive.google.com/...');
+    const fNote = mk('My Note', 'textarea', r.delivery_note, 'What was changed...');
+
+    const act = el('div', 'rev-actions');
+    if (!isDraft && isUrl(r.delivery_link)) {
+      const a = el('a', '', '🔗 Open delivery');
+      a.href = r.delivery_link.trim();
+      a.target = '_blank';
+      a.rel = 'noopener';
+      act.appendChild(a);
+    }
+    const del = el('button', 'btn ' + (isDraft ? 'btn-secondary' : 'btn-danger'), isDraft ? 'Cancel' : 'Delete');
+    del.type = 'button';
+    del.addEventListener('click', () => deleteRevision(taskId, r));
+    const save = el('button', 'btn btn-primary', 'Save');
+    save.type = 'button';
+    save.addEventListener('click', () => saveRevision(taskId, r, {
+      owner_note: fOwner.value.trim(),
+      delivery_link: fLink.value.trim(),
+      delivery_note: fNote.value.trim()
+    }, save));
+    act.appendChild(del);
+    act.appendChild(save);
+    card.appendChild(act);
+
+    box.appendChild(card);
+  });
+}
+
+function addRevision() {
+  const tid = openTaskIdInModal();
+  if (!tid || revDraft) { if (revDraft) showToast('Save or cancel the new edit first', 'error'); return; }
+  revDraft = { id: null, task_id: tid, owner_note: '', delivery_link: '', delivery_note: '' };
+  $('rev-section').open = true;
+  renderRevisions(tid);
+}
+
+async function saveRevision(taskId, rev, vals, btn) {
+  if (!vals.owner_note && !vals.delivery_link && !vals.delivery_note) {
+    showToast('Fill at least one field', 'error');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  const isDraft = rev === revDraft;
+
+  try {
+    if (isConnected && supabaseClient) {
+      const q = isDraft
+        ? supabaseClient.from('task_revisions').insert([{ task_id: taskId, ...vals }])
+        : supabaseClient.from('task_revisions').update(vals).eq('id', rev.id);
+      const { error } = await q;
+      if (error) throw error;
+    } else {
+      const list = revisions[taskId] = revisions[taskId] || [];
+      if (isDraft) {
+        const next = list.reduce((m, r) => Math.max(m, r.revision_no), 0) + 1;
+        list.push({ id: 'demo-rev-' + Date.now(), task_id: taskId, revision_no: next, created_at: new Date().toISOString(), ...vals });
+      } else {
+        Object.assign(rev, vals);
+      }
+      localStorage.setItem('demo_revisions', JSON.stringify(revisions));
+    }
+
+    if (isDraft) revDraft = null;
+    revDirty = false;
+    showToast(isDraft ? 'Edit added' : 'Edit saved', 'success');
+    await refreshData(true);
+    renderRevisions(taskId);
+    applyFilters();
+  } catch (err) {
+    console.error('Save edit error:', err);
+    showToast('Could not save edit: ' + err.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Save';
+  }
+}
+
+async function deleteRevision(taskId, rev) {
+  if (rev === revDraft) {
+    revDraft = null;
+    revDirty = false;
+    renderRevisions(taskId);
+    return;
+  }
+  if (!confirm('Delete Edit #' + rev.revision_no + '?')) return;
+
+  try {
+    if (isConnected && supabaseClient) {
+      const { error } = await supabaseClient.from('task_revisions').delete().eq('id', rev.id);
+      if (error) throw error;
+    } else {
+      revisions[taskId] = (revisions[taskId] || []).filter((r) => r.id !== rev.id);
+      localStorage.setItem('demo_revisions', JSON.stringify(revisions));
+    }
+    revDirty = false;
+    await refreshData(true);
+    renderRevisions(taskId);
+    applyFilters();
+  } catch (err) {
+    showToast('Delete failed: ' + err.message, 'error');
+  }
 }
 
 /* -------------------------------------------------------------------------- */

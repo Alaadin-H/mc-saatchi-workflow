@@ -253,6 +253,13 @@
           </div>
         </div>
       </form>
+
+      <!-- Edits / revisions (collapsed by default, a task can have many) -->
+      <details class="rev-section" id="rev-section" style="display:none;">
+        <summary id="rev-summary">Edits (0)</summary>
+        <div class="rev-list" id="rev-list"></div>
+        <button type="button" class="btn btn-secondary" id="btn-add-edit" onclick="addRevision()">+ Add Edit</button>
+      </details>
     </div>
   </div>
 

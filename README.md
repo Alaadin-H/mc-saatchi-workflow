@@ -108,3 +108,11 @@ production-task-board/
 ## 💡 نصائح إضافية
 - لتخصيص الخيارات الافتراضية للقوائم المنسدلة (العملاء، الأقسام، إلخ)، يمكنك تعديلها من `config.js` أو من جدول `app_settings` في Supabase مباشرة.
 - الموقع مصمم بتقنية Pure HTML/CSS/JS ولا يحتاج إلى أي أدوات تثبيت أو build steps معقدة، ويعمل فوراً بمجرد فتح `index.html` أو رفعه على أي استضافة (GitHub Pages, Netlify, Vercel).
+
+
+## ✎ قسم التعديلات (Edits)
+
+كل تاسك فيه قسم **Edits** مقفول افتراضيًا. بيحتوي على أي عدد من التعديلات، وكل تعديل فيه:
+Owner Note (ملاحظات صاحب التاسك) · New Delivery Link (لينك التسليم الجديد) · My Note (ملاحظتك).
+
+لتفعيله: شغّل ملف `supabase-add-revisions.sql` مرة واحدة في SQL Editor.

@@ -793,3 +793,63 @@ td a.link-chip:hover {
   border: 1px solid #334155;
   position: relative;
 }
+
+
+/* ---------- Edits / revisions ---------- */
+.tag-edit { background: #fce7f3; color: #9d174d; }
+.rev-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #fff;
+}
+.rev-section summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 13px;
+  color: #475569;
+}
+.rev-list { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }
+.rev-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rev-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  font-weight: 800;
+  color: #334155;
+}
+.rev-head .rev-meta { font-weight: 500; color: var(--muted); }
+.rev-card label { display: block; font-size: 12px; font-weight: 700; color: #475569; margin-bottom: 4px; }
+.rev-card input,
+.rev-card textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  color: var(--text);
+}
+.rev-card textarea { resize: vertical; min-height: 50px; }
+.rev-card input:focus,
+.rev-card textarea:focus { border-color: var(--primary); outline: none; }
+.rev-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+.rev-actions a {
+  margin-right: auto;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary);
+  text-decoration: none;
+}
+.rev-actions a:hover { text-decoration: underline; }
