@@ -129,6 +129,24 @@ struct ClipItemView: View {
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(isSelected ? Color.yellow : Color.clear, lineWidth: 2))
 
             Text(clip.name).font(.caption2).foregroundColor(.white).lineLimit(1).padding(.horizontal, 4)
+
+            if let anim = clip.animation {
+                // Keyframe markers along the bottom of the clip
+                let positions = Set(AnimatableProperty.allCases.flatMap { anim.keys(for: $0).map(\.at) }).sorted()
+                ForEach(positions, id: \.self) { at in
+                    Image(systemName: "diamond.fill")
+                        .font(.system(size: 7))
+                        .foregroundColor(.yellow)
+                        .position(x: CGFloat(at) * max(width, 10), y: 46)
+                }
+            }
+            if clip.playbackRate != 1 {
+                Text(String(format: "%.2gx", clip.playbackRate))
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(3)
+            }
         }
         .frame(width: max(width, 10), height: 52)
         .offset(x: baseOffset + dragOffset)
@@ -141,7 +159,7 @@ struct ClipItemView: View {
                 .onChanged { val in dragOffset = val.translation.width }
                 .onEnded { val in
                     let deltaSeconds = Double(val.translation.width / pointsPerSecond)
-                    let cmd = MoveClipCommand(clipID: clip.id, newStartTime: clip.startTime + deltaSeconds, newTrackID: nil)
+                    let cmd = MoveClipCommand(clipID: clip.id, newStartTime: editorState.snapToFrame(clip.startTime + deltaSeconds), newTrackID: nil)
                     editorState.execute(cmd)
                     dragOffset = 0
                 }

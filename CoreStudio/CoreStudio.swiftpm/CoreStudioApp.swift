@@ -106,6 +106,7 @@ final class EditorState: ObservableObject {
         self.project = Project(name: "Untitled Project")
         
         commandRegistry.registerStandardCommands()
+        commandRegistry.registerAnimationCommands()
         
         playbackEngine.onTimeChanged = { [weak self] time in
             // FIX: ignore invalid/unchanged times so we don't re-render the whole UI for nothing
@@ -126,9 +127,9 @@ final class EditorState: ObservableObject {
             .store(in: &cancellables)
     }
 
-    func execute(_ command: EditorCommand) {
+    func execute(_ command: EditorCommand, gesture: String? = nil) {
         CrashReporter.log("execute \(type(of: command))")
-        let result = commandHistory.execute(command, on: &project)
+        let result = commandHistory.execute(command, on: &project, gesture: gesture)
         if case .success = result, command.isMutating {
             project.updatedAt = Date()
             rebuildComposition()
@@ -221,7 +222,7 @@ final class EditorState: ObservableObject {
     
     func splitAtPlayhead() {
         guard let clipID = selectedClipID else { return }
-        let cmd = SplitClipAtTimeCommand(clipID: clipID, splitTime: currentTime)
+        let cmd = SplitClipAtTimeCommand(clipID: clipID, splitTime: snapToFrame(currentTime))
         execute(cmd)
     }
     
@@ -232,6 +233,37 @@ final class EditorState: ObservableObject {
         selectedClipID = nil
     }
     
+    // MARK: - Frames, properties, keyframes
+
+    var frameRate: Double {
+        project.sequences.first(where: { $0.id == project.activeSequenceID })?.frameRate ?? 30.0
+    }
+
+    /// Edits land on whole frames, so cuts never fall between two frames.
+    func snapToFrame(_ t: Double) -> Double {
+        let fps = frameRate
+        guard fps > 0 else { return t }
+        return max(0, (t * fps).rounded() / fps)
+    }
+
+    /// Commits a property change from the Inspector: a keyframe at the playhead
+    /// if the property is animated, otherwise its static value.
+    func commitProperty(_ property: AnimatableProperty, value: Double, clipID: UUID) {
+        guard let clip = project.clip(clipID) else { return }
+        if clip.isAnimated(property) {
+            execute(SetKeyframeCommand(clipID: clipID, property: property, timelineTime: currentTime, value: value))
+        } else {
+            execute(SetClipPropertyCommand(clipID: clipID, property: property, value: value))
+        }
+    }
+
+    /// The diamond button: records the value currently shown at the playhead as a keyframe.
+    func addKeyframeAtPlayhead(clipID: UUID, property: AnimatableProperty) {
+        guard let clip = project.clip(clipID) else { return }
+        let value = clip.value(of: property, atTimeline: currentTime)
+        execute(SetKeyframeCommand(clipID: clipID, property: property, timelineTime: snapToFrame(currentTime), value: value))
+    }
+
     func markIn() { inMark = currentTime }
     func markOut() { outMark = currentTime }
     func zoomIn() { zoomScale = min(zoomScale * 1.5, 100.0) }

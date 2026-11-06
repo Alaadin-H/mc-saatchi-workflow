@@ -2,8 +2,8 @@ import Foundation
 
 protocol EditorCommand: AnyObject {
     var isMutating: Bool { get }
+    /// Applies the edit. Undo is handled by CommandHistory snapshots, so commands don't implement it.
     func execute(on project: inout Project) -> Result<String, Error>
-    func undo(on project: inout Project) -> Bool
 }
 
 extension EditorCommand {

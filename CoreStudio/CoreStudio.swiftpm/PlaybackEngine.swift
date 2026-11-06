@@ -110,16 +110,18 @@ final class PlaybackEngine: ObservableObject {
                 guard let sourceTrack = avAsset.tracks(withMediaType: trackType).first else { continue }
 
                 // FIX: skip clips that overlap the previous clip on the same track (insertTimeRange would push them around)
-                guard clip.startTime >= trackEnd - 0.001, clip.duration > 0.01 else {
+                guard clip.startTime >= trackEnd - 0.001, clip.sourceDuration > 0.01 else {
                     CrashReporter.log("skipped overlapping clip \(clip.name)")
                     continue
                 }
                 // FIX: clamp the source range to the real media length
                 let sourceLength = sourceTrack.timeRange.end.seconds
                 let srcIn = max(0, min(clip.sourceInPoint, sourceLength))
-                let srcDur = max(0, min(clip.duration, sourceLength - srcIn))
+                let srcDur = max(0, min(clip.sourceDuration, sourceLength - srcIn))
                 guard srcDur > 0.01 else { continue }
-                trackEnd = clip.startTime + srcDur
+                // Speed: the source span is inserted, then stretched/squeezed to its timeline length
+                let timelineDur = srcDur / clip.playbackRate
+                trackEnd = clip.startTime + timelineDur
 
                 let sourceRange = CMTimeRange(start: CMTime(seconds: srcIn, preferredTimescale: 600),
                                               duration: CMTime(seconds: srcDur, preferredTimescale: 600))
@@ -127,10 +129,14 @@ final class PlaybackEngine: ObservableObject {
 
                 do {
                     try compTrack.insertTimeRange(sourceRange, of: sourceTrack, at: startTime)
+                    if abs(clip.playbackRate - 1) > 0.0001 {
+                        compTrack.scaleTimeRange(CMTimeRange(start: startTime, duration: sourceRange.duration),
+                                                 toDuration: CMTime(seconds: timelineDur, preferredTimescale: 600))
+                    }
                     if trackType == .video {
                         hasVideoClips = true
                         times.insert(clip.startTime)
-                        times.insert(clip.startTime + srcDur)
+                        times.insert(clip.startTime + timelineDur)
                     }
                 } catch {
                     print("Failed to insert track slice: \(error)")
@@ -142,6 +148,7 @@ final class PlaybackEngine: ObservableObject {
             self.composition = newComposition
             self.videoComposition = nil
             let playerItem = AVPlayerItem(asset: newComposition)
+            playerItem.audioTimePitchAlgorithm = .spectral // keep voices natural when speed changes
             self.player.replaceCurrentItem(with: playerItem)
             return
         }
@@ -199,25 +206,40 @@ final class PlaybackEngine: ObservableObject {
                     
                     let fitScale = min(renderSize.width / trackWidth, renderSize.height / trackHeight)
                     
-                    let userScale = CGFloat(clip.transform.scaleX)
-                    let userRot = CGFloat(clip.transform.rotationDegrees) * .pi / 180.0
-                    let userTx = CGFloat(clip.transform.positionX)
-                    let userTy = CGFloat(clip.transform.positionY)
-                    
-                    let centerX = renderSize.width / 2.0 + userTx
-                    let centerY = renderSize.height / 2.0 + userTy
-                    
-                    var finalXform = CGAffineTransform(translationX: centerX, y: centerY)
-                    finalXform = finalXform.rotated(by: userRot)
-                    finalXform = finalXform.scaledBy(x: fitScale * userScale, y: fitScale * userScale)
-                    
                     let transformedBounds = CGRect(origin: .zero, size: sourceTrack.naturalSize).applying(prefXform)
-                    finalXform = finalXform.translatedBy(x: -transformedBounds.midX, y: -transformedBounds.midY)
-                    finalXform = prefXform.concatenating(finalXform)
-                    
-                    let cmStartTime = CMTime(seconds: clip.startTime, preferredTimescale: 600)
-                    layerInst.setTransform(finalXform, at: cmStartTime)
-                    layerInst.setOpacity(Float(clip.opacity), at: cmStartTime)
+
+                    // The clip's picture transform at a timeline time (keyframes included).
+                    func xform(at t: Double) -> CGAffineTransform {
+                        let userScale = CGFloat(clip.value(of: .scale, atTimeline: t))
+                        let userRot = CGFloat(clip.value(of: .rotation, atTimeline: t)) * .pi / 180.0
+                        let centerX = renderSize.width / 2.0 + CGFloat(clip.value(of: .positionX, atTimeline: t))
+                        let centerY = renderSize.height / 2.0 + CGFloat(clip.value(of: .positionY, atTimeline: t))
+                        var m = CGAffineTransform(translationX: centerX, y: centerY)
+                        m = m.rotated(by: userRot)
+                        m = m.scaledBy(x: fitScale * userScale, y: fitScale * userScale)
+                        m = m.translatedBy(x: -transformedBounds.midX, y: -transformedBounds.midY)
+                        return prefXform.concatenating(m)
+                    }
+                    func alpha(at t: Double) -> Float { Float(clip.value(of: .opacity, atTimeline: t)) }
+
+                    if let anim = clip.animation, !anim.isEmpty {
+                        // Keyframes: AVFoundation only does straight-line ramps, so the
+                        // eased curve is approximated by short ramps (15 per second).
+                        let step = 1.0 / 15.0
+                        var t0 = start
+                        while t0 < end - 0.0001 {
+                            let t1 = min(end, t0 + step)
+                            let range = CMTimeRange(start: CMTime(seconds: t0, preferredTimescale: 600),
+                                                    end: CMTime(seconds: t1, preferredTimescale: 600))
+                            layerInst.setTransformRamp(fromStart: xform(at: t0), toEnd: xform(at: t1), timeRange: range)
+                            layerInst.setOpacityRamp(fromStartOpacity: alpha(at: t0), toEndOpacity: alpha(at: t1), timeRange: range)
+                            t0 = t1
+                        }
+                    } else {
+                        let cmStart = CMTime(seconds: start, preferredTimescale: 600)
+                        layerInst.setTransform(xform(at: start), at: cmStart)
+                        layerInst.setOpacity(alpha(at: start), at: cmStart)
+                    }
                     
                     layerInstructions.append(layerInst)
                 }
@@ -231,6 +253,7 @@ final class PlaybackEngine: ObservableObject {
         self.composition = newComposition
 
         let playerItem = AVPlayerItem(asset: newComposition)
+        playerItem.audioTimePitchAlgorithm = .spectral
         // FIX: an invalid video composition throws an exception that kills the app instantly.
         // Validate first; if it's invalid, play without transforms/layering instead of crashing.
         let fullRange = CMTimeRange(start: .zero, duration: newComposition.duration)

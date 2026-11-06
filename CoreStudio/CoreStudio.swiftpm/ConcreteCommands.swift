@@ -210,7 +210,6 @@ class GetProjectStateCommand: EditorCommand {
         return .failure(EditorError.general("Failed to serialize state."))
     }
 
-    func undo(on project: inout Project) -> Bool { return true }
 }
 
 class ImportMediaCommand: EditorCommand {
@@ -225,13 +224,6 @@ class ImportMediaCommand: EditorCommand {
         return .success("Imported \(asset.name)")
     }
     
-    func undo(on project: inout Project) -> Bool {
-        if didImport {
-            project.mediaAssets.removeAll(where: { $0.id == asset.id })
-            return true
-        }
-        return false
-    }
 }
 
 class SetSequenceFormatCommand: EditorCommand {
@@ -254,13 +246,6 @@ class SetSequenceFormatCommand: EditorCommand {
         return .success("Sequence format set to \(width)x\(height)")
     }
     
-    func undo(on project: inout Project) -> Bool {
-        guard let w = oldWidth, let h = oldHeight,
-              let seqIdx = project.sequences.firstIndex(where: { $0.id == project.activeSequenceID }) else { return false }
-        project.sequences[seqIdx].width = w
-        project.sequences[seqIdx].height = h
-        return true
-    }
 }
 
 class TrimClipCommand: EditorCommand {
@@ -309,19 +294,6 @@ class TrimClipCommand: EditorCommand {
         return .failure(EditorError.general("Clip not found"))
     }
     
-    func undo(on project: inout Project) -> Bool {
-        guard let sIn = oldSourceIn, let sOut = oldSourceOut, let sTime = oldStartTime,
-              let seqIdx = project.sequences.firstIndex(where: { $0.id == project.activeSequenceID }) else { return false }
-        for tIdx in project.sequences[seqIdx].tracks.indices {
-            if let cIdx = project.sequences[seqIdx].tracks[tIdx].clips.firstIndex(where: { $0.id == clipID }) {
-                project.sequences[seqIdx].tracks[tIdx].clips[cIdx].sourceInPoint = sIn
-                project.sequences[seqIdx].tracks[tIdx].clips[cIdx].sourceOutPoint = sOut
-                project.sequences[seqIdx].tracks[tIdx].clips[cIdx].startTime = sTime
-                return true
-            }
-        }
-        return false
-    }
 }
 
 class SetClipTransformCommand: EditorCommand {
@@ -361,16 +333,6 @@ class SetClipTransformCommand: EditorCommand {
         return .failure(EditorError.general("Clip not found"))
     }
     
-    func undo(on project: inout Project) -> Bool {
-        guard let old = oldTransform, let seqIdx = project.sequences.firstIndex(where: { $0.id == project.activeSequenceID }) else { return false }
-        for tIdx in project.sequences[seqIdx].tracks.indices {
-            if let cIdx = project.sequences[seqIdx].tracks[tIdx].clips.firstIndex(where: { $0.id == clipID }) {
-                project.sequences[seqIdx].tracks[tIdx].clips[cIdx].transform = old
-                return true
-            }
-        }
-        return false
-    }
 }
 
 class AddClipToTimelineCommand: EditorCommand {
@@ -396,12 +358,6 @@ class AddClipToTimelineCommand: EditorCommand {
         return .success("Added clip \(newClip.name) to timeline.")
     }
 
-    func undo(on project: inout Project) -> Bool {
-        guard let clipID = addedClipID, let seqIdx = project.sequences.firstIndex(where: { $0.id == project.activeSequenceID }),
-              let trackIdx = project.sequences[seqIdx].tracks.firstIndex(where: { $0.id == trackID }) else { return false }
-        project.sequences[seqIdx].tracks[trackIdx].clips.removeAll { $0.id == clipID }
-        return true
-    }
 }
 
 class MoveClipCommand: EditorCommand {
@@ -438,11 +394,6 @@ class MoveClipCommand: EditorCommand {
         return .success("Moved clip to \(clip.startTime)s.")
     }
 
-    func undo(on project: inout Project) -> Bool {
-        guard let oldTime = oldStartTime, let oldTrack = oldTrackID else { return false }
-        let reverseCmd = MoveClipCommand(clipID: clipID, newStartTime: oldTime, newTrackID: oldTrack)
-        return (try? reverseCmd.execute(on: &project).get()) != nil
-    }
 }
 
 class SetClipOpacityCommand: EditorCommand {
@@ -464,11 +415,6 @@ class SetClipOpacityCommand: EditorCommand {
         return .failure(EditorError.general("Clip not found"))
     }
 
-    func undo(on project: inout Project) -> Bool {
-        guard let oldOp = oldOpacity else { return false }
-        let reverse = SetClipOpacityCommand(clipID: clipID, opacity: oldOp)
-        return (try? reverse.execute(on: &project).get()) != nil
-    }
 }
 
 class SplitClipAtTimeCommand: EditorCommand {
@@ -484,11 +430,15 @@ class SplitClipAtTimeCommand: EditorCommand {
             if let cIdx = project.sequences[seqIdx].tracks[tIdx].clips.firstIndex(where: { $0.id == clipID }) {
                 let original = project.sequences[seqIdx].tracks[tIdx].clips[cIdx]
                 guard splitTime > original.startTime && splitTime < original.endTime else { return .failure(EditorError.general("Split time is outside clip bounds")) }
+                // Timeline offset -> source offset goes through the clip's speed
                 let offset = splitTime - original.startTime
-                project.sequences[seqIdx].tracks[tIdx].clips[cIdx].sourceOutPoint = original.sourceInPoint + offset
+                let sourceSplit = original.sourceInPoint + offset * original.playbackRate
+                let splitFraction = original.fraction(atTimeline: splitTime)
+                project.sequences[seqIdx].tracks[tIdx].clips[cIdx].sourceOutPoint = sourceSplit
+                project.sequences[seqIdx].tracks[tIdx].clips[cIdx].animation = original.animation?.slice(from: 0, to: splitFraction)
                 let newID = UUID()
                 createdClipID = newID
-                let secondClip = Clip(id: newID, mediaAssetID: original.mediaAssetID, name: "\(original.name) (Part 2)", startTime: splitTime, sourceInPoint: original.sourceInPoint + offset, sourceOutPoint: original.sourceOutPoint, opacity: original.opacity, transform: original.transform)
+                let secondClip = Clip(id: newID, mediaAssetID: original.mediaAssetID, name: "\(original.name) (Part 2)", startTime: splitTime, sourceInPoint: sourceSplit, sourceOutPoint: original.sourceOutPoint, opacity: original.opacity, transform: original.transform, speed: original.speed, animation: original.animation?.slice(from: splitFraction, to: 1))
                 project.sequences[seqIdx].tracks[tIdx].clips.append(secondClip)
                 return .success("Split clip at \(splitTime)s")
             }
@@ -496,19 +446,6 @@ class SplitClipAtTimeCommand: EditorCommand {
         return .failure(EditorError.general("Clip not found"))
     }
 
-    func undo(on project: inout Project) -> Bool {
-        guard let createdID = createdClipID, let seqIdx = project.sequences.firstIndex(where: { $0.id == project.activeSequenceID }) else { return false }
-        for tIdx in project.sequences[seqIdx].tracks.indices {
-            if let cIdx = project.sequences[seqIdx].tracks[tIdx].clips.firstIndex(where: { $0.id == clipID }),
-               let secondIdx = project.sequences[seqIdx].tracks[tIdx].clips.firstIndex(where: { $0.id == createdID }) {
-                let secondClip = project.sequences[seqIdx].tracks[tIdx].clips[secondIdx]
-                project.sequences[seqIdx].tracks[tIdx].clips[cIdx].sourceOutPoint = secondClip.sourceOutPoint
-                project.sequences[seqIdx].tracks[tIdx].clips.remove(at: secondIdx)
-                return true
-            }
-        }
-        return false
-    }
 }
 
 class DeleteClipCommand: EditorCommand {
@@ -531,12 +468,5 @@ class DeleteClipCommand: EditorCommand {
         return .failure(EditorError.general("Clip not found"))
     }
 
-    func undo(on project: inout Project) -> Bool {
-        guard let clip = deletedClip, let tID = oldTrackID,
-              let seqIdx = project.sequences.firstIndex(where: { $0.id == project.activeSequenceID }),
-              let tIdx = project.sequences[seqIdx].tracks.firstIndex(where: { $0.id == tID }) else { return false }
-        project.sequences[seqIdx].tracks[tIdx].clips.append(clip)
-        return true
-    }
 }
 

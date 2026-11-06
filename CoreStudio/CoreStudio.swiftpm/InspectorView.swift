@@ -3,24 +3,17 @@ import SwiftUI
 struct InspectorView: View {
     @EnvironmentObject var editorState: EditorState
 
-    @State private var dragStartTransform: ClipTransform?
-    @State private var dragStartOpacity: Double?
-    
-    @State private var tempTransform: ClipTransform = ClipTransform()
-    @State private var tempOpacity: Double = 1.0
-    
-    @State private var isDraggingScale = false
-    @State private var isDraggingRotation = false
-    @State private var isDraggingPosX = false
-    @State private var isDraggingPosY = false
-    @State private var isDraggingOpacity = false
+    // The property being dragged right now, and its live value
+    @State private var draggingProperty: AnimatableProperty?
+    @State private var dragValue: Double = 0
+    @State private var dragStartClip: Clip?
+
+    @State private var draggingSpeed = false
+    @State private var speedValue: Double = 1
 
     private var activeClip: Clip? {
-        guard let id = editorState.selectedClipID, let seq = editorState.project.sequences.first(where: { $0.id == editorState.project.activeSequenceID }) else { return nil }
-        for t in seq.tracks {
-            if let c = t.clips.first(where: { $0.id == id }) { return c }
-        }
-        return nil
+        guard let id = editorState.selectedClipID else { return nil }
+        return editorState.project.clip(id)
     }
 
     var body: some View {
@@ -29,104 +22,19 @@ struct InspectorView: View {
 
             if let clip = activeClip {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 14) {
                         Text(clip.name).font(.caption).bold()
+                        Text("◆ = keyframe at playhead").font(.caption2).foregroundColor(.gray)
                         Divider()
 
-                        // OPACITY
-                        VStack(alignment: .leading) {
-                            Text("Opacity: \(Int((isDraggingOpacity ? tempOpacity : clip.opacity) * 100))%").font(.caption2)
-                            Slider(
-                                value: Binding(
-                                    get: { isDraggingOpacity ? tempOpacity : clip.opacity },
-                                    set: { val in
-                                        tempOpacity = val
-                                        editorState.transientUpdate(clipID: clip.id) { $0.opacity = val }
-                                    }
-                                ),
-                                in: 0...1,
-                                onEditingChanged: { editing in
-                                    if editing {
-                                        isDraggingOpacity = true
-                                        tempOpacity = clip.opacity
-                                        dragStartOpacity = clip.opacity
-                                    } else {
-                                        isDraggingOpacity = false
-                                        if let start = dragStartOpacity {
-                                            editorState.transientUpdate(clipID: clip.id) { $0.opacity = start } // revert
-                                        }
-                                        editorState.execute(SetClipOpacityCommand(clipID: clip.id, opacity: tempOpacity))
-                                        editorState.commitTransientUpdate()
-                                    }
-                                }
-                            )
-                        }
-                        
+                        propertyRow(clip, .opacity, range: 0...1) { "\(Int($0 * 100))%" }
+                        propertyRow(clip, .scale, range: 0.1...3) { String(format: "%.2f", $0) }
+                        propertyRow(clip, .rotation, range: -180...180) { String(format: "%.0f°", $0) }
+                        propertyRow(clip, .positionX, range: -1920...1920) { String(format: "%.0f", $0) }
+                        propertyRow(clip, .positionY, range: -1080...1080) { String(format: "%.0f", $0) }
+
                         Divider()
-
-                        // SCALE
-                        VStack(alignment: .leading) {
-                            Text("Scale: \(String(format: "%.2f", isDraggingScale ? tempTransform.scaleX : clip.transform.scaleX))").font(.caption2)
-                            Slider(
-                                value: Binding(
-                                    get: { isDraggingScale ? tempTransform.scaleX : clip.transform.scaleX },
-                                    set: { val in
-                                        tempTransform.scaleX = val; tempTransform.scaleY = val
-                                        editorState.transientUpdate(clipID: clip.id) { $0.transform = tempTransform }
-                                    }
-                                ),
-                                in: 0.1...3.0,
-                                onEditingChanged: { handleTransformDrag($0, current: clip.transform, apply: { SetClipTransformCommand(clipID: clip.id, posX: nil, posY: nil, scale: tempTransform.scaleX, rotation: nil) }, clipID: clip.id) }
-                            )
-                        }
-                        
-                        // ROTATION
-                        VStack(alignment: .leading) {
-                            Text("Rotation: \(String(format: "%.0f°", isDraggingRotation ? tempTransform.rotationDegrees : clip.transform.rotationDegrees))").font(.caption2)
-                            Slider(
-                                value: Binding(
-                                    get: { isDraggingRotation ? tempTransform.rotationDegrees : clip.transform.rotationDegrees },
-                                    set: { val in
-                                        tempTransform.rotationDegrees = val
-                                        editorState.transientUpdate(clipID: clip.id) { $0.transform = tempTransform }
-                                    }
-                                ),
-                                in: -180...180,
-                                onEditingChanged: { handleTransformDrag($0, current: clip.transform, apply: { SetClipTransformCommand(clipID: clip.id, posX: nil, posY: nil, scale: nil, rotation: tempTransform.rotationDegrees) }, clipID: clip.id) }
-                            )
-                        }
-
-                        // POSITION X
-                        VStack(alignment: .leading) {
-                            Text("Position X: \(String(format: "%.0f", isDraggingPosX ? tempTransform.positionX : clip.transform.positionX))").font(.caption2)
-                            Slider(
-                                value: Binding(
-                                    get: { isDraggingPosX ? tempTransform.positionX : clip.transform.positionX },
-                                    set: { val in
-                                        tempTransform.positionX = val
-                                        editorState.transientUpdate(clipID: clip.id) { $0.transform = tempTransform }
-                                    }
-                                ),
-                                in: -1920...1920,
-                                onEditingChanged: { handleTransformDrag($0, current: clip.transform, apply: { SetClipTransformCommand(clipID: clip.id, posX: tempTransform.positionX, posY: nil, scale: nil, rotation: nil) }, clipID: clip.id) }
-                            )
-                        }
-
-                        // POSITION Y
-                        VStack(alignment: .leading) {
-                            Text("Position Y: \(String(format: "%.0f", isDraggingPosY ? tempTransform.positionY : clip.transform.positionY))").font(.caption2)
-                            Slider(
-                                value: Binding(
-                                    get: { isDraggingPosY ? tempTransform.positionY : clip.transform.positionY },
-                                    set: { val in
-                                        tempTransform.positionY = val
-                                        editorState.transientUpdate(clipID: clip.id) { $0.transform = tempTransform }
-                                    }
-                                ),
-                                in: -1080...1080,
-                                onEditingChanged: { handleTransformDrag($0, current: clip.transform, apply: { SetClipTransformCommand(clipID: clip.id, posX: nil, posY: tempTransform.positionY, scale: nil, rotation: nil) }, clipID: clip.id) }
-                            )
-                        }
+                        speedRow(clip)
 
                         Divider()
                         Button(role: .destructive, action: {
@@ -144,26 +52,98 @@ struct InspectorView: View {
         }
         .background(Color(UIColor.secondarySystemBackground))
     }
-    
-    private func handleTransformDrag(_ editing: Bool, current: ClipTransform, apply: @escaping () -> EditorCommand, clipID: UUID) {
-        if editing {
-            tempTransform = current
-            dragStartTransform = current
-            isDraggingScale = true // Generic toggle to allow active readout
-            isDraggingRotation = true
-            isDraggingPosX = true
-            isDraggingPosY = true
-        } else {
-            isDraggingScale = false
-            isDraggingRotation = false
-            isDraggingPosX = false
-            isDraggingPosY = false
-            if let start = dragStartTransform {
-                editorState.transientUpdate(clipID: clipID) { $0.transform = start } // revert
-                editorState.execute(apply()) // apply via command
-                editorState.commitTransientUpdate()
+
+    // MARK: - Property row (slider + keyframe buttons)
+
+    @ViewBuilder
+    private func propertyRow(_ clip: Clip, _ property: AnimatableProperty, range: ClosedRange<Double>, format: @escaping (Double) -> String) -> some View {
+        let animated = clip.isAnimated(property)
+        let shown = draggingProperty == property ? dragValue : clip.value(of: property, atTimeline: editorState.currentTime)
+
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("\(property.title): \(format(shown))").font(.caption2)
+                Spacer()
+                Button {
+                    editorState.addKeyframeAtPlayhead(clipID: clip.id, property: property)
+                } label: {
+                    Image(systemName: animated ? "diamond.fill" : "diamond")
+                }
+                .buttonStyle(.borderless)
+                .foregroundColor(animated ? .yellow : .gray)
+
+                if animated {
+                    Button {
+                        editorState.execute(ClearKeyframesCommand(clipID: clip.id, property: property))
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundColor(.gray)
+                }
+            }
+
+            Slider(
+                value: Binding(
+                    get: { shown },
+                    set: { newValue in
+                        dragValue = newValue
+                        // Live preview for static values. Animated values are committed as a keyframe on release.
+                        if !animated {
+                            editorState.transientUpdate(clipID: clip.id) { $0.setBaseValue(property, newValue) }
+                        }
+                    }
+                ),
+                in: range,
+                onEditingChanged: { editing in
+                    if editing {
+                        draggingProperty = property
+                        dragValue = shown
+                        dragStartClip = clip
+                    } else {
+                        // Put the clip back as it was, then apply the change once, as one undo step
+                        if let start = dragStartClip, !animated {
+                            editorState.transientUpdate(clipID: clip.id) { $0 = start }
+                        }
+                        draggingProperty = nil
+                        editorState.commitProperty(property, value: dragValue, clipID: clip.id)
+                        editorState.commitTransientUpdate()
+                    }
+                }
+            )
+        }
+    }
+
+    // MARK: - Speed
+
+    private func speedRow(_ clip: Clip) -> some View {
+        let shown = draggingSpeed ? speedValue : clip.playbackRate
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Speed: \(String(format: "%.2fx", shown))  ·  \(String(format: "%.1fs", clip.sourceDuration / shown))")
+                .font(.caption2)
+            Slider(
+                value: Binding(get: { shown }, set: { speedValue = $0 }),
+                in: 0.25...4,
+                onEditingChanged: { editing in
+                    if editing {
+                        draggingSpeed = true
+                        speedValue = clip.playbackRate
+                    } else {
+                        draggingSpeed = false
+                        editorState.execute(SetClipSpeedCommand(clipID: clip.id, speed: speedValue))
+                    }
+                }
+            )
+            HStack {
+                ForEach([0.5, 1.0, 2.0], id: \.self) { s in
+                    Button(String(format: "%.1fx", s)) {
+                        editorState.execute(SetClipSpeedCommand(clipID: clip.id, speed: s))
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption2)
+                }
             }
         }
     }
 }
-
