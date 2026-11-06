@@ -50,7 +50,7 @@ struct MainEditorView: View {
                             }
                         }
                         .pickerStyle(MenuPickerStyle())
-                        .onChange(of: selectedFormat) { newFormat in
+                        .onChange(of: selectedFormat) { _, newFormat in
                             guard let active = editorState.project.sequences.first(where: { $0.id == editorState.project.activeSequenceID }) else { return }
                             if Int(newFormat.size.width) != active.width || Int(newFormat.size.height) != active.height {
                                 let cmd = SetSequenceFormatCommand(width: Int(newFormat.size.width), height: Int(newFormat.size.height))
@@ -79,7 +79,7 @@ struct MainEditorView: View {
                             .disabled(editorState.selectedClipID == nil)
                             .padding(.trailing, 8)
 
-                        Button(action: { showAgentPanel.toggle() }) { Label("AI Agent", systemName: "cpu") }
+                        Button(action: { showAgentPanel.toggle() }) { Label("AI Agent", systemImage: "cpu") }
                             .padding(.trailing)
                     }
                     .frame(height: 44)

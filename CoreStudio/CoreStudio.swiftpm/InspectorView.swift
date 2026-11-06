@@ -132,7 +132,7 @@ struct InspectorView: View {
                         Button(role: .destructive, action: {
                             editorState.execute(DeleteClipCommand(clipID: clip.id))
                             editorState.selectedClipID = nil
-                        }) { Label("Delete Clip", systemName: "trash").font(.caption) }
+                        }) { Label("Delete Clip", systemImage: "trash").font(.caption) }
                     }
                     .padding()
                 }
