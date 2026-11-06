@@ -104,11 +104,11 @@ struct MainEditorView: View {
                         InspectorView()
                             .frame(width: geo.size.width * (showAgentPanel ? 0.15 : 0.25))
                     }
-                    .frame(height: geo.size.height * 0.55)
+                    .frame(height: max(0, geo.size.height * 0.55))
 
                     Divider()
                     TimelineView()
-                        .frame(height: geo.size.height * 0.45 - 44)
+                        .frame(height: max(0, geo.size.height * 0.45 - 44))
                 }
             }
         }

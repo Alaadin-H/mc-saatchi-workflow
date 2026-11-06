@@ -6,11 +6,13 @@ struct ContentView: View {
     var body: some View {
         MainEditorView()
             .onAppear {
+                CrashReporter.log("editor appeared")
                 if let loaded = editorState.projectStorage.loadLatestProject() {
+                    CrashReporter.log("loaded saved project")
                     editorState.project = loaded
                 }
                 editorState.rebuildComposition()
+                CrashReporter.log("startup finished")
             }
     }
 }
-

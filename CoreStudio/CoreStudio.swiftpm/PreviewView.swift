@@ -42,7 +42,11 @@ struct AVPlayerControllerRepresentable: UIViewControllerRepresentable {
         return controller
     }
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        uiViewController.player = player
+        // FIX: this runs on every UI update (30x/sec during playback). Re-assigning the player
+        // each time resets AVPlayerViewController and can loop forever. Only set it if it changed.
+        if uiViewController.player !== player {
+            uiViewController.player = player
+        }
     }
 }
 

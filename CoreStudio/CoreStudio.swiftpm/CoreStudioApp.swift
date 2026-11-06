@@ -3,13 +3,69 @@ import Combine
 
 @main
 struct CoreStudioApp: App {
-    @StateObject private var editorState = EditorState()
+    init() {
+        CrashReporter.install()
+        CrashReporter.log("app launch")
+    }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(editorState)
+            RootView()
                 .preferredColorScheme(.dark)
+        }
+    }
+}
+
+/// Safe mode: if the previous run crashed, show the crash report FIRST,
+/// without creating the editor (so a crash at startup can't hide the report).
+struct RootView: View {
+    @State private var crashReport: String? = CrashReporter.reportFromPreviousSession()
+
+    var body: some View {
+        if let report = crashReport {
+            CrashReportView(report: report) {
+                CrashReporter.log("user continued past crash report")
+                crashReport = nil
+            }
+        } else {
+            EditorRootView()
+        }
+    }
+}
+
+struct EditorRootView: View {
+    @StateObject private var editorState: EditorState = {
+        CrashReporter.log("EditorState init start")
+        let state = EditorState()
+        CrashReporter.log("EditorState init done")
+        return state
+    }()
+
+    var body: some View {
+        ContentView()
+            .environmentObject(editorState)
+    }
+}
+
+struct CrashReportView: View {
+    let report: String
+    let onContinue: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(report)
+                    .font(.system(size: 13, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .navigationTitle("Last run crashed — screenshot this")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Open editor", action: onContinue)
+                }
+            }
         }
     }
 }
@@ -52,7 +108,9 @@ final class EditorState: ObservableObject {
         commandRegistry.registerStandardCommands()
         
         playbackEngine.onTimeChanged = { [weak self] time in
-            self?.currentTime = time
+            // FIX: ignore invalid/unchanged times so we don't re-render the whole UI for nothing
+            guard let self, time.isFinite, abs(time - self.currentTime) > 0.0001 else { return }
+            self.currentTime = time
         }
         
         playbackEngine.onStatusChanged = { [weak self] playing in
@@ -69,6 +127,7 @@ final class EditorState: ObservableObject {
     }
 
     func execute(_ command: EditorCommand) {
+        CrashReporter.log("execute \(type(of: command))")
         let result = commandHistory.execute(command, on: &project)
         if case .success = result, command.isMutating {
             project.updatedAt = Date()
@@ -148,7 +207,7 @@ final class EditorState: ObservableObject {
     func handleJ() { playbackEngine.jklReverse() }
     func handleK() { playbackEngine.jklStop() }
     func handleL() { playbackEngine.jklForward() }
-    func togglePlayPause() { playbackEngine.togglePlayPause() }
+    func togglePlayPause() { CrashReporter.log("play/pause"); playbackEngine.togglePlayPause() }
     
     func stepForward() {
         let fps = project.sequences.first(where: { $0.id == project.activeSequenceID })?.frameRate ?? 30.0

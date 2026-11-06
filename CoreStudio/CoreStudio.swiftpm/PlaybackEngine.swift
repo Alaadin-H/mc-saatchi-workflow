@@ -79,7 +79,9 @@ final class PlaybackEngine: ObservableObject {
         let newComposition = AVMutableComposition()
         let renderSize = CGSize(width: sequence.width, height: sequence.height)
         
-        let assetMap = Dictionary(uniqueKeysWithValues: mediaAssets.map { ($0.id, $0) })
+        CrashReporter.log("rebuild composition: \(sequence.tracks.map { $0.clips.count }) clips, \(sequence.width)x\(sequence.height)")
+        // FIX: never crash on duplicate asset IDs
+        let assetMap = Dictionary(mediaAssets.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let docsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         
         var compositionTracks: [UUID: AVMutableCompositionTrack] = [:]
@@ -96,14 +98,31 @@ final class PlaybackEngine: ObservableObject {
             compositionTracks[track.id] = compTrack
 
             // FIX: insert clips in time order, otherwise insertTimeRange shifts clips that were inserted earlier
+            var trackEnd: Double = 0
             for clip in track.clips.sorted(by: { $0.startTime < $1.startTime }) {
                 guard let assetInfo = assetMap[clip.mediaAssetID] else { continue }
                 let fileURL = docsDirectory.appendingPathComponent(assetInfo.relativePath)
+                guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                    CrashReporter.log("missing media file: \(assetInfo.relativePath)")
+                    continue
+                }
                 let avAsset = AVURLAsset(url: fileURL)
                 guard let sourceTrack = avAsset.tracks(withMediaType: trackType).first else { continue }
 
-                let sourceRange = CMTimeRange(start: CMTime(seconds: clip.sourceInPoint, preferredTimescale: 600),
-                                              duration: CMTime(seconds: clip.duration, preferredTimescale: 600))
+                // FIX: skip clips that overlap the previous clip on the same track (insertTimeRange would push them around)
+                guard clip.startTime >= trackEnd - 0.001, clip.duration > 0.01 else {
+                    CrashReporter.log("skipped overlapping clip \(clip.name)")
+                    continue
+                }
+                // FIX: clamp the source range to the real media length
+                let sourceLength = sourceTrack.timeRange.end.seconds
+                let srcIn = max(0, min(clip.sourceInPoint, sourceLength))
+                let srcDur = max(0, min(clip.duration, sourceLength - srcIn))
+                guard srcDur > 0.01 else { continue }
+                trackEnd = clip.startTime + srcDur
+
+                let sourceRange = CMTimeRange(start: CMTime(seconds: srcIn, preferredTimescale: 600),
+                                              duration: CMTime(seconds: srcDur, preferredTimescale: 600))
                 let startTime = CMTime(seconds: clip.startTime, preferredTimescale: 600)
 
                 do {
@@ -111,7 +130,7 @@ final class PlaybackEngine: ObservableObject {
                     if trackType == .video {
                         hasVideoClips = true
                         times.insert(clip.startTime)
-                        times.insert(clip.endTime)
+                        times.insert(clip.startTime + srcDur)
                     }
                 } catch {
                     print("Failed to insert track slice: \(error)")
@@ -210,11 +229,20 @@ final class PlaybackEngine: ObservableObject {
 
         newVideoComposition.instructions = instructions
         self.composition = newComposition
-        self.videoComposition = newVideoComposition
-        
+
         let playerItem = AVPlayerItem(asset: newComposition)
-        playerItem.videoComposition = newVideoComposition
+        // FIX: an invalid video composition throws an exception that kills the app instantly.
+        // Validate first; if it's invalid, play without transforms/layering instead of crashing.
+        let fullRange = CMTimeRange(start: .zero, duration: newComposition.duration)
+        if newVideoComposition.isValid(for: newComposition, timeRange: fullRange, validationDelegate: nil) {
+            self.videoComposition = newVideoComposition
+            playerItem.videoComposition = newVideoComposition
+        } else {
+            self.videoComposition = nil
+            CrashReporter.log("video composition INVALID, playing without it (\(instructions.count) instructions)")
+        }
         self.player.replaceCurrentItem(with: playerItem)
+        CrashReporter.log("rebuild composition done, duration \(newComposition.duration.seconds)s")
     }
 }
 

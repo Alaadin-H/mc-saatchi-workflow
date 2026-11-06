@@ -34,9 +34,18 @@ struct MediaBinView: View {
                     Image(systemName: "photo.on.rectangle")
                 }
                 .onChange(of: selectedPhotoItem) { newItem in
+                    guard let newItem else { return }
+                    CrashReporter.log("photos import started")
                     Task {
-                        if let data = try? await newItem?.loadTransferable(type: VideoTransferable.self) {
-                            importMedia(from: data.url)
+                        do {
+                            if let data = try await newItem.loadTransferable(type: VideoTransferable.self) {
+                                // FIX: UI/project changes must happen on the main thread
+                                await MainActor.run { importMedia(from: data.url) }
+                            } else {
+                                CrashReporter.log("photos import: no data")
+                            }
+                        } catch {
+                            CrashReporter.log("photos import failed: \(error.localizedDescription)")
                         }
                     }
                 }
@@ -67,6 +76,7 @@ struct MediaBinView: View {
     }
 
     private func importMedia(from url: URL) {
+        CrashReporter.log("import media: \(url.lastPathComponent)")
         if let asset = editorState.mediaImporter.copyMediaToLocalStorage(sourceURL: url) {
             let cmd = ImportMediaCommand(asset: asset)
             editorState.execute(cmd)
@@ -77,6 +87,7 @@ struct MediaBinView: View {
         guard let activeSeq = editorState.project.sequences.first(where: { $0.id == editorState.project.activeSequenceID }),
               let track = activeSeq.tracks.first(where: { $0.type == (asset.type == .video ? .video : .audio) }) else { return }
         
+        CrashReporter.log("add to timeline: \(asset.name) (\(asset.durationSeconds)s)")
         let cmd = AddClipToTimelineCommand(mediaAssetID: asset.id, trackID: track.id, startTime: editorState.currentTime)
         editorState.execute(cmd)
     }
