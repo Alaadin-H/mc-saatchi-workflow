@@ -1,0 +1,5 @@
+CoreStudio.xcodeproj/
+build/
+Payload/
+*.ipa
+xcodebuild.log
