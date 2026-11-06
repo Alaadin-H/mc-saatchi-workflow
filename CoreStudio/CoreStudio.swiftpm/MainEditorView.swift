@@ -37,7 +37,7 @@ struct MainEditorView: View {
                                 .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
 
-                        InspectorView()
+                        InspectorView(isTyping: $isTyping)
                             .frame(width: available * 0.24)
                             .dsPanel()
                     }
@@ -51,6 +51,9 @@ struct MainEditorView: View {
                 .padding(.bottom, gap)
             }
             .background(DS.Palette.canvas.ignoresSafeArea())
+        }
+        .sheet(isPresented: $editorState.showShortcuts) {
+            ShortcutsView()
         }
         .sheet(isPresented: $showExport) {
             ExportView()
@@ -88,12 +91,29 @@ struct MainEditorView: View {
             // Edit tools
             HStack(spacing: DS.Space.xs) {
                 IconButton(systemName: "cursorarrow", isActive: editorState.activeTool == .select) { editorState.activeTool = .select }
-                IconButton(systemName: "scissors") { editorState.splitAtPlayhead() }
-                    .disabled(editorState.selectedClipID == nil)
-                    .opacity(editorState.selectedClipID == nil ? 0.4 : 1)
+                IconButton(systemName: "scissors", isActive: editorState.activeTool == .blade) { editorState.activeTool = .blade }
+                IconButton(systemName: "rectangle.split.2x1") { editorState.addEdit(allTracks: false) }
                 IconButton(systemName: "trash") { editorState.deleteSelected() }
                     .disabled(editorState.selectedClipID == nil)
                     .opacity(editorState.selectedClipID == nil ? 0.4 : 1)
+            }
+
+            Divider().frame(height: 22).overlay(DS.Palette.stroke)
+
+            HStack(spacing: DS.Space.xs) {
+                // Titles
+                Menu {
+                    ForEach(TitlePreset.all) { preset in
+                        Button { editorState.addTitle(preset: preset.id) } label: { Label(preset.name, systemImage: preset.icon) }
+                    }
+                } label: {
+                    Image(systemName: "textformat")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(DS.Palette.textPrimary)
+                        .frame(width: DS.Size.iconButton, height: DS.Size.iconButton)
+                }
+                // Transition on the selected clip
+                IconButton(systemName: "square.on.square.dashed") { editorState.applyDefaultTransition() }
             }
 
             Divider().frame(height: 22).overlay(DS.Palette.stroke)
@@ -134,6 +154,8 @@ struct MainEditorView: View {
                 }
             }
 
+            IconButton(systemName: "keyboard") { editorState.showShortcuts = true }
+
             IconButton(systemName: "cpu", isActive: showAgentPanel) {
                 withAnimation(.easeInOut(duration: 0.2)) { showAgentPanel.toggle() }
             }
@@ -149,30 +171,69 @@ struct MainEditorView: View {
         .frame(height: DS.Size.toolbarHeight)
     }
 
-    // MARK: - Hidden keyboard shortcuts (hardware keyboard)
+    // MARK: - Keyboard shortcuts (Adobe Premiere Pro layout)
+    // Hidden buttons; holding ⌘ on an iPad keyboard lists the ⌘ ones.
 
     private var keyboardShortcuts: some View {
         ZStack {
+            // Playback & navigation
             Group {
-                Button("") { editorState.togglePlayPause() }.keyboardShortcut(.space, modifiers: [])
-                Button("") { editorState.handleJ() }.keyboardShortcut("j", modifiers: [])
-                Button("") { editorState.handleK() }.keyboardShortcut("k", modifiers: [])
-                Button("") { editorState.handleL() }.keyboardShortcut("l", modifiers: [])
-                Button("") { editorState.stepBackward() }.keyboardShortcut(.leftArrow, modifiers: [])
-                Button("") { editorState.stepForward() }.keyboardShortcut(.rightArrow, modifiers: [])
-                Button("") { editorState.splitAtPlayhead() }.keyboardShortcut("c", modifiers: [])
-                Button("") { editorState.activeTool = .select }.keyboardShortcut("v", modifiers: [])
-                Button("") { editorState.deleteSelected() }.keyboardShortcut(.delete, modifiers: [])
+                Button("Play / Pause") { editorState.togglePlayPause() }.keyboardShortcut(.space, modifiers: [])
+                Button("Play Backward") { editorState.handleJ() }.keyboardShortcut("j", modifiers: [])
+                Button("Stop") { editorState.handleK() }.keyboardShortcut("k", modifiers: [])
+                Button("Play Forward") { editorState.handleL() }.keyboardShortcut("l", modifiers: [])
+                Button("Back 1 Frame") { editorState.stepFrames(-1) }.keyboardShortcut(.leftArrow, modifiers: [])
+                Button("Forward 1 Frame") { editorState.stepFrames(1) }.keyboardShortcut(.rightArrow, modifiers: [])
+                Button("Back 5 Frames") { editorState.stepFrames(-5) }.keyboardShortcut(.leftArrow, modifiers: [.shift])
+                Button("Forward 5 Frames") { editorState.stepFrames(5) }.keyboardShortcut(.rightArrow, modifiers: [.shift])
+                Button("Previous Edit") { editorState.goToEditPoint(next: false) }.keyboardShortcut(.upArrow, modifiers: [])
+                Button("Next Edit") { editorState.goToEditPoint(next: true) }.keyboardShortcut(.downArrow, modifiers: [])
             }
             Group {
-                Button("") { editorState.undo() }.keyboardShortcut("z", modifiers: [.command])
-                Button("") { editorState.redo() }.keyboardShortcut("z", modifiers: [.command, .shift])
-                Button("") { editorState.zoomIn() }.keyboardShortcut("=", modifiers: [])
-                Button("") { editorState.zoomIn() }.keyboardShortcut("+", modifiers: [])
-                Button("") { editorState.zoomOut() }.keyboardShortcut("-", modifiers: [])
-                Button("") { editorState.markIn() }.keyboardShortcut("i", modifiers: [])
-                Button("") { editorState.markOut() }.keyboardShortcut("o", modifiers: [])
-                Button("") { showExport = true }.keyboardShortcut("e", modifiers: [.command])
+                Button("Go to Start") { editorState.goToStart() }.keyboardShortcut(.home, modifiers: [])
+                Button("Go to End") { editorState.goToEnd() }.keyboardShortcut(.end, modifiers: [])
+                Button("Mark In") { editorState.markIn() }.keyboardShortcut("i", modifiers: [])
+                Button("Mark Out") { editorState.markOut() }.keyboardShortcut("o", modifiers: [])
+                Button("Go to In") { editorState.goToIn() }.keyboardShortcut("i", modifiers: [.shift])
+                Button("Go to Out") { editorState.goToOut() }.keyboardShortcut("o", modifiers: [.shift])
+                Button("Clear In and Out") { editorState.clearInOut() }.keyboardShortcut("x", modifiers: [.command, .shift])
+            }
+            // Tools
+            Group {
+                Button("Selection Tool") { editorState.activeTool = .select }.keyboardShortcut("v", modifiers: [])
+                Button("Razor Tool") { editorState.activeTool = .blade }.keyboardShortcut("c", modifiers: [])
+                Button("Type Tool (Add Title)") { editorState.addTitle() }.keyboardShortcut("t", modifiers: [])
+            }
+            // Editing
+            Group {
+                Button("Add Edit") { editorState.addEdit(allTracks: false) }.keyboardShortcut("k", modifiers: [.command])
+                Button("Add Edit to All Tracks") { editorState.addEdit(allTracks: true) }.keyboardShortcut("k", modifiers: [.command, .shift])
+                Button("Ripple Trim Previous Edit to Playhead") { editorState.rippleTrim(.start) }.keyboardShortcut("q", modifiers: [])
+                Button("Ripple Trim Next Edit to Playhead") { editorState.rippleTrim(.end) }.keyboardShortcut("w", modifiers: [])
+                Button("Clear") { editorState.deleteSelected() }.keyboardShortcut(.delete, modifiers: [])
+                Button("Clear (Forward Delete)") { editorState.deleteSelected() }.keyboardShortcut(.deleteForward, modifiers: [])
+                Button("Ripple Delete") { editorState.rippleDeleteSelected() }.keyboardShortcut(.delete, modifiers: [.shift])
+                Button("Nudge Left") { editorState.nudgeSelected(frames: -1) }.keyboardShortcut(.leftArrow, modifiers: [.option])
+                Button("Nudge Right") { editorState.nudgeSelected(frames: 1) }.keyboardShortcut(.rightArrow, modifiers: [.option])
+                Button("Apply Video Transition") { editorState.applyDefaultTransition() }.keyboardShortcut("d", modifiers: [.command])
+            }
+            Group {
+                Button("Copy") { editorState.copySelected() }.keyboardShortcut("c", modifiers: [.command])
+                Button("Cut") { editorState.cutSelected() }.keyboardShortcut("x", modifiers: [.command])
+                Button("Paste") { editorState.pasteAtPlayhead() }.keyboardShortcut("v", modifiers: [.command])
+                Button("Undo") { editorState.undo() }.keyboardShortcut("z", modifiers: [.command])
+                Button("Redo") { editorState.redo() }.keyboardShortcut("z", modifiers: [.command, .shift])
+            }
+            // View & file
+            Group {
+                Button("Zoom In") { editorState.zoomIn() }.keyboardShortcut("=", modifiers: [])
+                Button("Zoom In ") { editorState.zoomIn() }.keyboardShortcut("+", modifiers: [])
+                Button("Zoom Out") { editorState.zoomOut() }.keyboardShortcut("-", modifiers: [])
+                Button("Zoom to Sequence") { editorState.zoomToFit() }.keyboardShortcut("\\", modifiers: [])
+                Button("Save") { editorState.saveNow() }.keyboardShortcut("s", modifiers: [.command])
+                Button("Export Media") { showExport = true }.keyboardShortcut("m", modifiers: [.command])
+                Button("Export") { showExport = true }.keyboardShortcut("e", modifiers: [.command])
+                Button("Keyboard Shortcuts") { editorState.showShortcuts = true }.keyboardShortcut("/", modifiers: [.command])
             }
         }
         .opacity(0)
@@ -288,5 +349,60 @@ struct ExportView: View {
             Spacer()
             Text(value).font(DS.Typo.value).foregroundColor(DS.Palette.textPrimary)
         }
+    }
+}
+
+// MARK: - Shortcuts sheet
+
+struct ShortcutsView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private let sections: [(String, [(String, String)])] = [
+        ("Playback", [("Space", "Play / Pause"), ("J  K  L", "Shuttle back / stop / forward (press again = faster)"),
+                      ("← →", "Back / forward 1 frame"), ("⇧ ← →", "Back / forward 5 frames"),
+                      ("↑ ↓", "Previous / next edit point"), ("Home  End", "Start / end of sequence")]),
+        ("Marking", [("I  O", "Mark In / Out"), ("⇧I  ⇧O", "Go to In / Out"), ("⌘⇧X", "Clear In and Out")]),
+        ("Tools", [("V", "Selection tool"), ("C", "Razor tool (tap a clip to cut it)"), ("T", "Add title at playhead")]),
+        ("Editing", [("⌘K", "Add edit (cut at playhead)"), ("⌘⇧K", "Add edit to all tracks"),
+                     ("Q", "Ripple trim start to playhead"), ("W", "Ripple trim end to playhead"),
+                     ("Delete", "Delete clip"), ("⇧ Delete", "Ripple delete"),
+                     ("⌥ ← →", "Nudge clip 1 frame"), ("⌘D", "Apply Cross Dissolve"),
+                     ("⌘C  ⌘X  ⌘V", "Copy / cut / paste at playhead"), ("⌘Z  ⌘⇧Z", "Undo / redo")]),
+        ("View & File", [("=  −", "Zoom timeline in / out"), ("\\", "Zoom to sequence"),
+                         ("⌘S", "Save"), ("⌘M", "Export media"), ("⌘/", "This list")])
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.l) {
+            HStack {
+                Text("Keyboard Shortcuts").font(.system(size: 20, weight: .bold)).foregroundColor(DS.Palette.textPrimary)
+                Chip(text: "Premiere Pro", color: DS.Palette.accent)
+                Spacer()
+                IconButton(systemName: "xmark", tint: DS.Palette.textSecondary) { dismiss() }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: DS.Space.l) {
+                    ForEach(sections, id: \.0) { section in
+                        SectionCard(title: section.0) {
+                            ForEach(section.1, id: \.0) { item in
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text(item.0)
+                                        .font(DS.Typo.value)
+                                        .foregroundColor(DS.Palette.textPrimary)
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(RoundedRectangle(cornerRadius: 4).fill(DS.Palette.panel))
+                                        .frame(width: 120, alignment: .leading)
+                                    Text(item.1).font(DS.Typo.label).foregroundColor(DS.Palette.textSecondary)
+                                    Spacer(minLength: 0)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(DS.Space.xl)
+        .background(DS.Palette.panel.ignoresSafeArea())
+        .preferredColorScheme(.dark)
     }
 }

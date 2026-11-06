@@ -271,12 +271,15 @@ class TrimClipCommand: EditorCommand {
         for tIdx in project.sequences[seqIdx].tracks.indices {
             if let cIdx = project.sequences[seqIdx].tracks[tIdx].clips.firstIndex(where: { $0.id == clipID }) {
                 let clip = project.sequences[seqIdx].tracks[tIdx].clips[cIdx]
-                guard let asset = project.mediaAssets.first(where: { $0.id == clip.mediaAssetID }) else { return .failure(EditorError.general("Asset missing")) }
-                
+                // Titles have no media, so any length is fine
+                let mediaLength = clip.isTitle ? Double.greatestFiniteMagnitude
+                    : project.mediaAssets.first(where: { $0.id == clip.mediaAssetID })?.durationSeconds
+                guard let assetDuration = mediaLength else { return .failure(EditorError.general("Asset missing")) }
+
                 let targetIn = newSourceIn ?? clip.sourceInPoint
                 let targetOut = newSourceOut ?? clip.sourceOutPoint
-                guard targetIn >= 0, targetOut <= asset.durationSeconds, targetIn < targetOut else {
-                    return .failure(EditorError.general("Invalid trim range. Asset duration is \(asset.durationSeconds)"))
+                guard targetIn >= 0, targetOut <= assetDuration, targetIn < targetOut else {
+                    return .failure(EditorError.general("Invalid trim range. Asset duration is \(assetDuration)"))
                 }
                 
                 oldSourceIn = clip.sourceInPoint
@@ -438,7 +441,7 @@ class SplitClipAtTimeCommand: EditorCommand {
                 project.sequences[seqIdx].tracks[tIdx].clips[cIdx].animation = original.animation?.slice(from: 0, to: splitFraction)
                 let newID = UUID()
                 createdClipID = newID
-                let secondClip = Clip(id: newID, mediaAssetID: original.mediaAssetID, name: "\(original.name) (Part 2)", startTime: splitTime, sourceInPoint: sourceSplit, sourceOutPoint: original.sourceOutPoint, opacity: original.opacity, transform: original.transform, speed: original.speed, animation: original.animation?.slice(from: splitFraction, to: 1), effects: original.effects)
+                let secondClip = Clip(id: newID, mediaAssetID: original.mediaAssetID, name: "\(original.name) (Part 2)", startTime: splitTime, sourceInPoint: sourceSplit, sourceOutPoint: original.sourceOutPoint, opacity: original.opacity, transform: original.transform, speed: original.speed, animation: original.animation?.slice(from: splitFraction, to: 1), effects: original.effects, title: original.title)
                 project.sequences[seqIdx].tracks[tIdx].clips.append(secondClip)
                 return .success("Split clip at \(splitTime)s")
             }

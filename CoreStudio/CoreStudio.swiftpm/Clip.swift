@@ -37,6 +37,10 @@ struct Clip: Identifiable, Codable, Hashable {
     var animation: ClipAnimation?
     /// Effects, applied top to bottom. nil = none (keeps older project files loading).
     var effects: [AppliedEffect]?
+    /// When set, this clip is a title (text) and has no media.
+    var title: TitleStyle?
+    /// Transition into this clip from the one before it (or from beneath).
+    var transitionIn: ClipTransition?
 
     static let speedRange: ClosedRange<Double> = 0.1...16
 
@@ -48,7 +52,7 @@ struct Clip: Identifiable, Codable, Hashable {
     var duration: Double { sourceDuration / playbackRate }
     var endTime: Double { startTime + duration }
 
-    init(id: UUID = UUID(), mediaAssetID: UUID, name: String, startTime: Double, sourceInPoint: Double, sourceOutPoint: Double, opacity: Double = 1.0, transform: ClipTransform = ClipTransform(), speed: Double? = nil, animation: ClipAnimation? = nil, effects: [AppliedEffect]? = nil) {
+    init(id: UUID = UUID(), mediaAssetID: UUID, name: String, startTime: Double, sourceInPoint: Double, sourceOutPoint: Double, opacity: Double = 1.0, transform: ClipTransform = ClipTransform(), speed: Double? = nil, animation: ClipAnimation? = nil, effects: [AppliedEffect]? = nil, title: TitleStyle? = nil, transitionIn: ClipTransition? = nil) {
         self.id = id
         self.mediaAssetID = mediaAssetID
         self.name = name
@@ -60,6 +64,8 @@ struct Clip: Identifiable, Codable, Hashable {
         self.speed = speed
         self.animation = animation
         self.effects = effects
+        self.title = title
+        self.transitionIn = transitionIn
     }
 }
 

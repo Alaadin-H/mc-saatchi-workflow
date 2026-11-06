@@ -112,69 +112,156 @@ final class PlaybackEngine: ObservableObject {
         let renderSize = CGSize(width: sequence.width, height: sequence.height)
         let assetMap = Dictionary(mediaAssets.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let docsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let frame = 1.0 / max(1, sequence.frameRate)
 
-        struct Placed { let clip: Clip; let compTrackID: CMPersistentTrackID; let preferredTransform: CGAffineTransform; let naturalSize: CGSize }
-        // Video clips actually placed, per editor track (bottom track first)
+        /// A clip as it ended up in the timeline, with its transition window
+        struct Placed {
+            let clip: Clip
+            let layer: RenderLayer
+            let previous: RenderLayer?      // outgoing clip of a cut transition
+            let window: (Double, Double)?   // transition window
+        }
         var placedVideo: [UUID: [Placed]] = [:]
         var cutTimes = Set<Double>([0])
+        var timelineEnd = 0.0
 
-        for track in sequence.tracks where !track.isMuted {
-            let mediaType: AVMediaType = track.type == .video ? .video : .audio
-            guard let compTrack = newComposition.addMutableTrack(withMediaType: mediaType, preferredTrackID: kCMPersistentTrackID_Invalid) else { continue }
+        func sourceTrack(for clip: Clip, _ type: AVMediaType) -> AVAssetTrack? {
+            guard let info = assetMap[clip.mediaAssetID] else { return nil }
+            let url = docsDirectory.appendingPathComponent(info.relativePath)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                CrashReporter.log("missing media file: \(info.relativePath)")
+                return nil
+            }
+            return AVURLAsset(url: url).tracks(withMediaType: type).first
+        }
 
-            // Clips are inserted in time order; overlapping clips on one track are skipped
-            var trackEnd = 0.0
-            for clip in track.clips.sorted(by: { $0.startTime < $1.startTime }) {
-                guard let info = assetMap[clip.mediaAssetID] else { continue }
-                let url = docsDirectory.appendingPathComponent(info.relativePath)
-                guard FileManager.default.fileExists(atPath: url.path) else {
-                    CrashReporter.log("missing media file: \(info.relativePath)")
-                    continue
+        /// Inserts `clip` (optionally extended by `lead` seconds before and `tail` after, for transitions).
+        @discardableResult
+        func insert(_ clip: Clip, source: AVAssetTrack, into track: AVMutableCompositionTrack, lead: Double, tail: Double) -> Bool {
+            let rate = clip.playbackRate
+            let sourceLength = source.timeRange.end.seconds
+            let srcIn = max(0, clip.sourceInPoint - lead * rate)
+            let srcOut = min(sourceLength, clip.sourceOutPoint + tail * rate)
+            let srcDur = srcOut - srcIn
+            guard srcDur > 0.01 else { return false }
+            let at = CMTime(seconds: clip.startTime - lead, preferredTimescale: 600)
+            let range = CMTimeRange(start: CMTime(seconds: srcIn, preferredTimescale: 600),
+                                    duration: CMTime(seconds: srcDur, preferredTimescale: 600))
+            do {
+                try track.insertTimeRange(range, of: source, at: at)
+                if abs(rate - 1) > 0.0001 {
+                    track.scaleTimeRange(CMTimeRange(start: at, duration: range.duration),
+                                         toDuration: CMTime(seconds: srcDur / rate, preferredTimescale: 600))
                 }
-                let asset = AVURLAsset(url: url)
-                // A video clip on a video track brings its picture; on an audio track, its sound
-                guard let source = asset.tracks(withMediaType: mediaType).first else { continue }
-                guard clip.startTime >= trackEnd - 0.001, clip.sourceDuration > 0.01 else {
-                    CrashReporter.log("skipped overlapping clip \(clip.name)")
-                    continue
-                }
-
-                let sourceLength = source.timeRange.end.seconds
-                let srcIn = max(0, min(clip.sourceInPoint, sourceLength))
-                let srcDur = max(0, min(clip.sourceDuration, sourceLength - srcIn))
-                guard srcDur > 0.01 else { continue }
-                let timelineDur = srcDur / clip.playbackRate
-                let at = CMTime(seconds: clip.startTime, preferredTimescale: 600)
-                let sourceRange = CMTimeRange(start: CMTime(seconds: srcIn, preferredTimescale: 600),
-                                              duration: CMTime(seconds: srcDur, preferredTimescale: 600))
-                do {
-                    try compTrack.insertTimeRange(sourceRange, of: source, at: at)
-                    if abs(clip.playbackRate - 1) > 0.0001 {
-                        compTrack.scaleTimeRange(CMTimeRange(start: at, duration: sourceRange.duration),
-                                                 toDuration: CMTime(seconds: timelineDur, preferredTimescale: 600))
-                    }
-                } catch {
-                    CrashReporter.log("insert failed for \(clip.name): \(error.localizedDescription)")
-                    continue
-                }
-                trackEnd = clip.startTime + timelineDur
-
-                if mediaType == .video {
-                    var placedClip = clip
-                    // What was really inserted (media may be shorter than the clip claims)
-                    placedClip.sourceInPoint = srcIn
-                    placedClip.sourceOutPoint = srcIn + srcDur
-                    placedVideo[track.id, default: []].append(Placed(clip: placedClip, compTrackID: compTrack.trackID,
-                                                                     preferredTransform: source.preferredTransform,
-                                                                     naturalSize: source.naturalSize))
-                    cutTimes.insert(clip.startTime)
-                    cutTimes.insert(clip.startTime + timelineDur)
-                }
+                return true
+            } catch {
+                CrashReporter.log("insert failed for \(clip.name): \(error.localizedDescription)")
+                return false
             }
         }
 
-        // Empty tracks (e.g. "Video 2" with no clips) play fine but make export fail
-        // with "Operation Stopped", so they are removed.
+        for track in sequence.tracks where !track.isMuted {
+            // Keep clips in time order and drop overlapping ones
+            var clips: [Clip] = []
+            for clip in track.clips.sorted(by: { $0.startTime < $1.startTime }) where clip.sourceDuration > 0.01 {
+                if let last = clips.last, clip.startTime < last.endTime - 0.001 {
+                    CrashReporter.log("skipped overlapping clip \(clip.name)")
+                    continue
+                }
+                clips.append(clip)
+            }
+            timelineEnd = max(timelineEnd, clips.last?.endTime ?? 0)
+
+            if track.type == .audio {
+                guard let comp = newComposition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { continue }
+                for clip in clips {
+                    if let source = sourceTrack(for: clip, .audio) { insert(clip, source: source, into: comp, lead: 0, tail: 0) }
+                }
+                continue
+            }
+
+            // Video: clips alternate between two composition tracks (A/B), so two
+            // neighbours can overlap during a transition.
+            guard let compA = newComposition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
+                  let compB = newComposition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { continue }
+            let sources = clips.map { $0.isTitle ? nil : sourceTrack(for: $0, .video) }
+
+            // Media available beyond each clip's edges (timeline seconds); titles have no limit
+            func handleBefore(_ i: Int) -> Double {
+                clips[i].isTitle ? .greatestFiniteMagnitude : clips[i].sourceInPoint / clips[i].playbackRate
+            }
+            func handleAfter(_ i: Int) -> Double {
+                guard !clips[i].isTitle else { return .greatestFiniteMagnitude }
+                let length = sources[i]?.timeRange.end.seconds ?? clips[i].sourceOutPoint
+                return max(0, length - clips[i].sourceOutPoint) / clips[i].playbackRate
+            }
+
+            var lead = Array(repeating: 0.0, count: clips.count)
+            var tail = Array(repeating: 0.0, count: clips.count)
+            var windows: [(Double, Double)?] = Array(repeating: nil, count: clips.count)
+            var hasOutgoing = Array(repeating: false, count: clips.count)
+
+            for i in clips.indices {
+                guard let transition = clips[i].transitionIn else { continue }
+                let duration = max(frame, min(transition.duration, clips[i].duration))
+                if i > 0, abs(clips[i - 1].endTime - clips[i].startTime) < frame * 0.75 {
+                    // Across the cut: half before, half after, limited by available media
+                    let half = duration / 2
+                    // (each side at most half of the neighbouring clip, so windows never overlap)
+                    let l = min(half, handleBefore(i), clips[i - 1].duration / 2)
+                    let t = min(half, handleAfter(i - 1), clips[i].duration / 2)
+                    if l + t >= frame {
+                        lead[i] = l
+                        tail[i - 1] = t
+                        windows[i] = (clips[i].startTime - l, clips[i].startTime + t)
+                        hasOutgoing[i] = true
+                    }
+                } else {
+                    // Nothing right before it: transition in from beneath
+                    windows[i] = (clips[i].startTime, clips[i].startTime + duration)
+                }
+            }
+
+            var layers: [RenderLayer?] = Array(repeating: nil, count: clips.count)
+            for i in clips.indices {
+                let clip = clips[i]
+                if clip.isTitle {
+                    layers[i] = RenderLayer(trackID: nil, clip: clip, preferredTransform: .identity, naturalSize: renderSize)
+                    continue
+                }
+                guard let source = sources[i] else { continue }
+                let comp = i % 2 == 0 ? compA : compB
+                guard insert(clip, source: source, into: comp, lead: lead[i], tail: tail[i]) else { continue }
+                layers[i] = RenderLayer(trackID: comp.trackID, clip: clip,
+                                        preferredTransform: source.preferredTransform, naturalSize: source.naturalSize)
+            }
+
+            for i in clips.indices {
+                guard let layer = layers[i] else { continue }
+                let previous = hasOutgoing[i] ? layers[i - 1] : nil
+                placedVideo[track.id, default: []].append(Placed(clip: clips[i], layer: layer, previous: previous, window: windows[i]))
+                cutTimes.insert(clips[i].startTime)
+                cutTimes.insert(clips[i].endTime)
+                if let w = windows[i] { cutTimes.insert(w.0); cutTimes.insert(w.1) }
+            }
+        }
+
+        // A black picture under everything, for the whole timeline: titles and gaps
+        // still have frames, and the timeline is as long as its last clip or title.
+        if !placedVideo.isEmpty, timelineEnd > 0.01, let blackURL = BlackVideo.url(),
+           let black = AVURLAsset(url: blackURL).tracks(withMediaType: .video).first,
+           let base = newComposition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) {
+            let one = CMTimeRange(start: .zero, duration: CMTime(value: 1, timescale: 1))
+            do {
+                try base.insertTimeRange(one, of: black, at: .zero)
+                base.scaleTimeRange(CMTimeRange(start: .zero, duration: one.duration),
+                                    toDuration: CMTime(seconds: timelineEnd, preferredTimescale: 600))
+            } catch {
+                CrashReporter.log("black base failed: \(error.localizedDescription)")
+            }
+        }
+
+        // Empty tracks play fine but make export fail ("Operation Stopped")
         for t in newComposition.tracks where t.segments.isEmpty {
             newComposition.removeTrack(t)
         }
@@ -191,13 +278,13 @@ final class PlaybackEngine: ObservableObject {
             return
         }
 
-        // The plan: contiguous time ranges covering the whole timeline, each listing the
-        // clips on screen in it, bottom track first.
+        // The plan: contiguous time ranges covering the whole timeline.
         var cuts: [Double] = []
-        for t in cutTimes.sorted() where t < total - 0.0005 {
+        for t in cutTimes.sorted() where t >= 0 && t < total - 0.0005 {
             if let last = cuts.last, t - last < 0.001 { continue }
             cuts.append(t)
         }
+        if cuts.first != 0 { cuts.insert(0, at: 0) }
         cuts.append(total)
 
         let videoTrackOrder = sequence.tracks.filter { $0.type == .video && !$0.isMuted }.map(\.id)
@@ -205,22 +292,28 @@ final class PlaybackEngine: ObservableObject {
         for i in 0..<(cuts.count - 1) {
             let start = cuts[i], end = cuts[i + 1]
             let mid = (start + end) / 2
-            var layers: [RenderLayer] = []
+            var tracks: [TrackRender] = []
             for trackID in videoTrackOrder {
-                if let p = placedVideo[trackID]?.first(where: { mid >= $0.clip.startTime && mid < $0.clip.endTime }) {
-                    layers.append(RenderLayer(trackID: p.compTrackID, clip: p.clip,
-                                              preferredTransform: p.preferredTransform, naturalSize: p.naturalSize))
+                guard let placed = placedVideo[trackID] else { continue }
+                // A clip whose transition window covers this moment wins (it's coming in)
+                if let p = placed.first(where: { p in
+                    guard let w = p.window, p.previous != nil else { return false }
+                    return mid >= w.0 && mid < w.1
+                }) {
+                    tracks.append(TrackRender(incoming: p.layer, outgoing: p.previous, transition: p.clip.transitionIn, window: p.window))
+                } else if let p = placed.first(where: { mid >= $0.clip.startTime && mid < $0.clip.endTime }) {
+                    tracks.append(TrackRender(incoming: p.layer, outgoing: nil, transition: p.clip.transitionIn, window: p.window))
                 }
             }
             let startCM = CMTime(seconds: start, preferredTimescale: 600)
             let endCM = i == cuts.count - 2 ? newComposition.duration : CMTime(seconds: end, preferredTimescale: 600)
-            instructions.append(CompositionInstruction(timeRange: CMTimeRange(start: startCM, end: endCM), layers: layers))
+            instructions.append(CompositionInstruction(timeRange: CMTimeRange(start: startCM, end: endCM), tracks: tracks))
         }
 
         let videoComposition = AVMutableVideoComposition()
         videoComposition.customVideoCompositorClass = CoreStudioCompositor.self
         videoComposition.renderSize = renderSize
-        videoComposition.frameDuration = CMTime(seconds: 1.0 / max(1, sequence.frameRate), preferredTimescale: 60000)
+        videoComposition.frameDuration = CMTime(seconds: frame, preferredTimescale: 60000)
         videoComposition.instructions = instructions
 
         self.videoComposition = videoComposition

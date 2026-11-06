@@ -36,6 +36,9 @@ enum DS {
         static let videoClipSelected = Color(hex: 0x6E7BFF)
         static let audioClip = Color(hex: 0x1F9D63)
         static let audioClipSelected = Color(hex: 0x2FD27A)
+        static let titleClip = Color(hex: 0xB0479E)
+        static let titleClipSelected = Color(hex: 0xE05FCB)
+        static let transition = Color.white.opacity(0.35)
         static let trackLane = Color(hex: 0x16181D)
         static let ruler = Color(hex: 0x1B1E24)
     }

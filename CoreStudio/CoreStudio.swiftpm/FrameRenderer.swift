@@ -11,17 +11,28 @@ import CoreImage
 // Because we draw every frame ourselves (Core Image), keyframes are exact per frame
 // and effects can run on each clip.
 
-/// One clip on screen, as the compositor needs it.
+/// One clip's picture, as the compositor needs it.
 struct RenderLayer {
-    let trackID: CMPersistentTrackID
+    /// Composition track to read frames from; nil for titles (drawn, not decoded)
+    let trackID: CMPersistentTrackID?
     let clip: Clip
     /// The source video's own rotation (e.g. portrait phone footage)
     let preferredTransform: CGAffineTransform
-    /// Size of the decoded frames
+    /// Size of the decoded frames (for titles: the canvas)
     let naturalSize: CGSize
 }
 
-/// What is on screen during `timeRange`. Layers are bottom first.
+/// What one editor track shows during a time range: a clip, possibly in a
+/// transition from the clip before it.
+struct TrackRender {
+    let incoming: RenderLayer
+    let outgoing: RenderLayer?
+    let transition: ClipTransition?
+    /// Timeline window of the transition (start, end)
+    let window: (Double, Double)?
+}
+
+/// What is on screen during `timeRange`. Tracks are bottom first.
 final class CompositionInstruction: NSObject, AVVideoCompositionInstructionProtocol {
     let timeRange: CMTimeRange
     let enablePostProcessing: Bool = false
@@ -29,12 +40,17 @@ final class CompositionInstruction: NSObject, AVVideoCompositionInstructionProto
     let requiredSourceTrackIDs: [NSValue]?
     let passthroughTrackID: CMPersistentTrackID = kCMPersistentTrackID_Invalid
 
-    let layers: [RenderLayer]
+    let tracks: [TrackRender]
 
-    init(timeRange: CMTimeRange, layers: [RenderLayer]) {
+    init(timeRange: CMTimeRange, tracks: [TrackRender]) {
         self.timeRange = timeRange
-        self.layers = layers
-        self.requiredSourceTrackIDs = layers.isEmpty ? nil : layers.map { NSNumber(value: $0.trackID) }
+        self.tracks = tracks
+        var ids: [NSValue] = []
+        for t in tracks {
+            if let id = t.incoming.trackID { ids.append(NSNumber(value: id)) }
+            if let id = t.outgoing?.trackID { ids.append(NSNumber(value: id)) }
+        }
+        self.requiredSourceTrackIDs = ids.isEmpty ? nil : ids
         super.init()
     }
 }
@@ -65,6 +81,15 @@ enum FrameRenderer {
         m = m.scaledBy(x: fit * scale, y: fit * scale)
         m = m.translatedBy(x: -bounds.midX, y: -bounds.midY)
         return pref.concatenating(m)
+    }
+
+    /// One clip's finished picture, or nil if its frame isn't available.
+    static func picture(_ layer: RenderLayer, request: AVAsynchronousVideoCompositionRequest, at time: Double, canvas: CGSize) -> CIImage? {
+        if let style = layer.clip.title {
+            return render(layer, source: TitleRenderer.image(for: style, canvas: canvas), at: time, canvas: canvas)
+        }
+        guard let id = layer.trackID, let buffer = request.sourceFrame(byTrackID: id) else { return nil }
+        return render(layer, source: CIImage(cvPixelBuffer: buffer), at: time, canvas: canvas)
     }
 
     /// One clip's finished picture on the canvas (Core Image coordinates).
@@ -120,10 +145,19 @@ final class CoreStudioCompositor: NSObject, AVVideoCompositing {
 
                 if let instruction = request.videoCompositionInstruction as? CompositionInstruction {
                     let time = request.compositionTime.seconds
-                    for layer in instruction.layers {
-                        guard let buffer = request.sourceFrame(byTrackID: layer.trackID) else { continue }
-                        let picture = FrameRenderer.render(layer, source: CIImage(cvPixelBuffer: buffer), at: time, canvas: canvas)
-                        frame = picture.composited(over: frame)
+                    for track in instruction.tracks {
+                        guard let incoming = FrameRenderer.picture(track.incoming, request: request, at: time, canvas: canvas) else { continue }
+                        if let transition = track.transition, let window = track.window, window.1 > window.0,
+                           time >= window.0, time <= window.1 {
+                            let start = window.0, end = window.1
+                            let outgoing = track.outgoing.flatMap { FrameRenderer.picture($0, request: request, at: time, canvas: canvas) }
+                            let progress = (time - start) / (end - start)
+                            let blended = TransitionRenderer.blend(type: transition.type, outgoing: outgoing, incoming: incoming,
+                                                                   progress: progress, canvas: canvasRect)
+                            frame = blended.composited(over: frame)
+                        } else {
+                            frame = incoming.composited(over: frame)
+                        }
                     }
                 }
 

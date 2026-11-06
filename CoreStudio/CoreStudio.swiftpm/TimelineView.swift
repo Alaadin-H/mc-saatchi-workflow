@@ -31,6 +31,7 @@ struct TimelineView: View {
                     let audioTracks = sequence.tracks.filter { $0.type == .audio }
                     let tracks = videoTracks + audioTracks
                     let tracksHeight = CGFloat(tracks.count) * (DS.Size.trackHeight + DS.Size.trackGap)
+                    let _ = rememberViewport(geo.size.width)
 
                     ScrollView([.horizontal, .vertical]) {
                         ZStack(alignment: .topLeading) {
@@ -76,6 +77,14 @@ struct TimelineView: View {
                 }
             }
         }
+    }
+}
+
+extension TimelineView {
+    /// Remembers the visible width for "zoom to fit" (no UI update needed).
+    func rememberViewport(_ width: CGFloat) -> Bool {
+        if abs(editorState.timelineViewportWidth - width) > 1 { editorState.timelineViewportWidth = width }
+        return true
     }
 }
 
@@ -184,9 +193,12 @@ struct ClipItemView: View {
         let baseOffset = TimelineEngine.secondsToPoints(seconds: clip.startTime, pointsPerSecond: pointsPerSecond)
         let isSelected = editorState.selectedClipID == clip.id
         let isVideo = track.type == .video
-        let fill = isVideo
-            ? (isSelected ? DS.Palette.videoClipSelected : DS.Palette.videoClip)
-            : (isSelected ? DS.Palette.audioClipSelected : DS.Palette.audioClip)
+        let fill = clip.isTitle
+            ? (isSelected ? DS.Palette.titleClipSelected : DS.Palette.titleClip)
+            : isVideo
+                ? (isSelected ? DS.Palette.videoClipSelected : DS.Palette.videoClip)
+                : (isSelected ? DS.Palette.audioClipSelected : DS.Palette.audioClip)
+        let transitionWidth = clip.transitionIn.map { min(width, CGFloat($0.duration / 2) * pointsPerSecond) } ?? 0
 
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: DS.Radius.s, style: .continuous)
@@ -196,7 +208,22 @@ struct ClipItemView: View {
                         .stroke(isSelected ? Color.white : Color.white.opacity(0.12), lineWidth: isSelected ? 2 : 1)
                 )
 
+            if transitionWidth > 0 {
+                // Transition marker at the clip's head
+                Path { p in
+                    p.move(to: .zero)
+                    p.addLine(to: CGPoint(x: transitionWidth, y: 0))
+                    p.addLine(to: CGPoint(x: 0, y: DS.Size.trackHeight))
+                    p.closeSubpath()
+                }
+                .fill(DS.Palette.transition)
+                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.s, style: .continuous))
+            }
+
             HStack(spacing: 4) {
+                if clip.isTitle {
+                    Image(systemName: "textformat").font(.system(size: 9, weight: .bold))
+                }
                 if !(clip.effects ?? []).isEmpty {
                     Image(systemName: "wand.and.stars").font(.system(size: 8, weight: .bold))
                 }
@@ -228,9 +255,15 @@ struct ClipItemView: View {
         .frame(width: width, height: DS.Size.trackHeight)
         .offset(x: baseOffset + dragOffset)
         .shadow(color: isSelected ? fill.opacity(0.5) : .clear, radius: 6)
-        .onTapGesture {
-            editorState.selectedClipID = clip.id
-            editorState.selectedTrackID = track.id
+        .onTapGesture { location in
+            if editorState.activeTool == .blade {
+                // Razor: cut where tapped
+                let t = clip.startTime + Double(location.x / pointsPerSecond)
+                editorState.razor(clip, at: t)
+            } else {
+                editorState.selectedClipID = clip.id
+                editorState.selectedTrackID = track.id
+            }
         }
         .gesture(
             DragGesture()

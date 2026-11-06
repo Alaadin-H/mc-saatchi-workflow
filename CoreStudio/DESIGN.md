@@ -21,9 +21,13 @@ only the architecture ideas, re-implemented from scratch in Swift.
 Also: export (`ExportService.swift`) through the same compositor, and a design
 system (`DesignSystem.swift`) that every screen uses.
 
+| A title is a clip whose content is its own data (no media) | `Title.swift`: `Clip.title`, drawn by `TitleRenderer`, presets |
+| A transition belongs to the clip it leads into, centred on the cut | `Transition.swift`: `Clip.transitionIn`; neighbours alternate between two composition tracks (A/B) so both frames exist across the cut |
+
+Premiere Pro keyboard layout: `MainEditorView` (⌘/ shows the list), actions in `EditorActions.swift`.
+
 ## Next (roadmap)
 
-1. **Clip kinds**: titles (text), stills, adjustment layers.
-2. **Transitions** (cross dissolve, slide) in the compositor.
+1. **Clip kinds**: stills (photos), adjustment layers.
 3. **Exact rational time** at the render boundary for 29.97/59.94 fps material.
 4. **Auto-captions** with Apple's on-device Speech framework.

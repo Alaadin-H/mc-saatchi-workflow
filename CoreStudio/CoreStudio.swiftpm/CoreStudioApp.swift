@@ -92,6 +92,12 @@ final class EditorState: ObservableObject {
     @Published var activeTool: EditorTool = .select
     @Published var inMark: Double? = nil
     @Published var outMark: Double? = nil
+    @Published var showShortcuts = false
+
+    /// Copied clip (Cmd+C)
+    var clipboard: Clip?
+    /// Visible width of the timeline, for "zoom to fit"
+    var timelineViewportWidth: CGFloat = 800
 
     let commandRegistry = CommandRegistry()
     let commandHistory = CommandHistory()
@@ -108,6 +114,7 @@ final class EditorState: ObservableObject {
         commandRegistry.registerStandardCommands()
         commandRegistry.registerAnimationCommands()
         commandRegistry.registerEffectCommands()
+        commandRegistry.registerEditingCommands()
         
         playbackEngine.onTimeChanged = { [weak self] time in
             // FIX: ignore invalid/unchanged times so we don't re-render the whole UI for nothing
