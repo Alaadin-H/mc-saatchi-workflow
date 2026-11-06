@@ -178,7 +178,7 @@ final class EditorState: ObservableObject {
 
     func rebuildComposition() {
         guard let activeSequence = project.sequences.first(where: { $0.id == project.activeSequenceID }) else { return }
-        playbackEngine.updateComposition(sequence: activeSequence, mediaAssets: project.mediaAssets)
+        playbackEngine.updateComposition(sequence: activeSequence, mediaAssets: project.mediaAssets, resumeAt: currentTime)
     }
     
     // MARK: - Live Preview Helpers (Throttled)

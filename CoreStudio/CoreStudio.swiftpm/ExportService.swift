@@ -66,7 +66,15 @@ final class ExportService: ObservableObject {
                 case .cancelled:
                     self.state = .idle
                 default:
-                    let message = session.error?.localizedDescription ?? "Export failed."
+                    // Include the codes so the real cause is visible (e.g. AVFoundation -11838)
+                    var message = "Export failed."
+                    if let error = session.error as NSError? {
+                        message = "\(error.localizedDescription) (\(error.domain) \(error.code))"
+                        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
+                            message += " — \(underlying.localizedDescription) (\(underlying.domain) \(underlying.code))"
+                        }
+                        if let reason = error.localizedFailureReason { message += " — \(reason)" }
+                    }
                     self.state = .failed(message)
                     CrashReporter.log("export failed: \(message)")
                 }

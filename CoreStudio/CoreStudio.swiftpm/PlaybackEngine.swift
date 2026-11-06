@@ -14,6 +14,8 @@ final class PlaybackEngine: ObservableObject {
     private var timeObserver: Any?
     private var statusObserver: NSKeyValueObservation?
     private var currentRate: Float = 0.0
+    /// True while a rebuilt timeline is being put back at the playhead; time updates are ignored meanwhile.
+    private var restoringTime = false
 
     init() {
         setupObservers()
@@ -26,7 +28,8 @@ final class PlaybackEngine: ObservableObject {
     private func setupObservers() {
         let interval = CMTime(value: 1, timescale: 30)
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            self?.onTimeChanged?(time.seconds)
+            guard let self, !self.restoringTime else { return }
+            self.onTimeChanged?(time.seconds)
         }
         
         statusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
@@ -85,7 +88,25 @@ final class PlaybackEngine: ObservableObject {
     /// Rebuilds what the player plays from the edit.
     /// Audio and video are laid out in an AVComposition; the picture of every frame is
     /// then drawn by CoreStudioCompositor from the plan (CompositionInstruction) built here.
-    func updateComposition(sequence: EditSequence, mediaAssets: [MediaAsset]) {
+    /// Swaps in a rebuilt timeline WITHOUT losing the playhead (a new item would start at 0)
+    /// and keeps playing if it was playing.
+    private func install(_ item: AVPlayerItem, resumeAt time: Double) {
+        let rate = player.rate
+        restoringTime = true
+        player.replaceCurrentItem(with: item)
+        let duration = item.asset.duration.seconds
+        let target = max(0, duration.isFinite ? min(time, duration) : time)
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.restoringTime = false
+                self.onTimeChanged?(target)
+                if rate != 0 { self.player.rate = rate }
+            }
+        }
+    }
+
+    func updateComposition(sequence: EditSequence, mediaAssets: [MediaAsset], resumeAt resumeTime: Double = 0) {
         CrashReporter.log("rebuild composition: \(sequence.tracks.map { $0.clips.count }) clips, \(sequence.width)x\(sequence.height)")
         let newComposition = AVMutableComposition()
         let renderSize = CGSize(width: sequence.width, height: sequence.height)
@@ -152,6 +173,12 @@ final class PlaybackEngine: ObservableObject {
             }
         }
 
+        // Empty tracks (e.g. "Video 2" with no clips) play fine but make export fail
+        // with "Operation Stopped", so they are removed.
+        for t in newComposition.tracks where t.segments.isEmpty {
+            newComposition.removeTrack(t)
+        }
+
         self.composition = newComposition
         let item = AVPlayerItem(asset: newComposition)
         item.audioTimePitchAlgorithm = .spectral // natural voices when speed changes
@@ -159,7 +186,7 @@ final class PlaybackEngine: ObservableObject {
         let total = newComposition.duration.seconds
         guard !placedVideo.isEmpty, total > 0.01 else {
             self.videoComposition = nil
-            player.replaceCurrentItem(with: item)
+            install(item, resumeAt: resumeTime)
             CrashReporter.log("rebuild done (audio only), \(total)s")
             return
         }
@@ -198,7 +225,7 @@ final class PlaybackEngine: ObservableObject {
 
         self.videoComposition = videoComposition
         item.videoComposition = videoComposition
-        player.replaceCurrentItem(with: item)
+        install(item, resumeAt: resumeTime)
         CrashReporter.log("rebuild done: \(instructions.count) segments, \(total)s")
     }
 }
