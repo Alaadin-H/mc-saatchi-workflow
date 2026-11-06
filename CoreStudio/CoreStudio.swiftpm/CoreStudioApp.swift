@@ -96,6 +96,8 @@ final class EditorState: ObservableObject {
 
     /// Copied clip (Cmd+C)
     var clipboard: Clip?
+    /// The terminal (and Claude conversation); kept here so it survives closing the panel
+    lazy var terminal = TerminalSession(editor: self)
     /// Visible width of the timeline, for "zoom to fit"
     var timelineViewportWidth: CGFloat = 800
 

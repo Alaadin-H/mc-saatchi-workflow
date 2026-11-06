@@ -24,6 +24,10 @@ system (`DesignSystem.swift`) that every screen uses.
 | A title is a clip whose content is its own data (no media) | `Title.swift`: `Clip.title`, drawn by `TitleRenderer`, presets |
 | A transition belongs to the clip it leads into, centred on the cut | `Transition.swift`: `Clip.transitionIn`; neighbours alternate between two composition tracks (A/B) so both frames exist across the cut |
 
+One command layer for UI, scripts and AI (Concat's API/MCP idea): the in-app **terminal**
+(`AIAgentPanelView.swift`) runs any editor command directly, and sends plain-language requests
+to Claude (`ClaudeAgent.swift`, Messages API over HTTPS) with every editor command as a tool.
+
 Premiere Pro keyboard layout: `MainEditorView` (⌘/ shows the list), actions in `EditorActions.swift`.
 
 ## Next (roadmap)

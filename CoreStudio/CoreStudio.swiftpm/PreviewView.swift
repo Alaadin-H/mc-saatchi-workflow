@@ -24,7 +24,7 @@ struct PreviewView: View {
             // The frame, letterboxed to the sequence's aspect ratio
             ZStack {
                 DS.Palette.canvas
-                AVPlayerControllerRepresentable(player: editorState.playbackEngine.player)
+                PlayerSurface(player: editorState.playbackEngine.player)
                     .aspectRatio(aspect, contentMode: .fit)
                     .background(Color.black)
                     .overlay(RoundedRectangle(cornerRadius: 2).stroke(DS.Palette.stroke, lineWidth: 1))
@@ -76,19 +76,25 @@ struct PreviewView: View {
     }
 }
 
-struct AVPlayerControllerRepresentable: UIViewControllerRepresentable {
+/// Plain video surface (an AVPlayerLayer). Unlike AVPlayerViewController it never
+/// takes keyboard focus, so Space / arrows / J K L reach our shortcuts.
+final class PlayerLayerView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+}
+
+struct PlayerSurface: UIViewRepresentable {
     let player: AVPlayer
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        controller.player = player
-        controller.showsPlaybackControls = false
-        controller.view.backgroundColor = .black
-        return controller
+
+    func makeUIView(context: Context) -> PlayerLayerView {
+        let view = PlayerLayerView()
+        view.backgroundColor = .black
+        view.playerLayer.videoGravity = .resizeAspect
+        view.playerLayer.player = player
+        return view
     }
-    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        // Only set the player when it changed (re-assigning every update can loop forever)
-        if uiViewController.player !== player {
-            uiViewController.player = player
-        }
+
+    func updateUIView(_ view: PlayerLayerView, context: Context) {
+        if view.playerLayer.player !== player { view.playerLayer.player = player }
     }
 }

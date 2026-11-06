@@ -189,15 +189,33 @@ class GetProjectStateCommand: EditorCommand {
         }
         
         let dict: [String: Any] = [
-            "sequence": ["width": seq.width, "height": seq.height, "fps": seq.frameRate] as [String: Any],
+            "sequence": ["width": seq.width, "height": seq.height, "fps": seq.frameRate,
+                         "duration": TimelineEngine.calculateSequenceDuration(sequence: seq)] as [String: Any],
             "mediaAssets": project.mediaAssets.map { ["id": $0.id.uuidString, "name": $0.name, "duration": $0.durationSeconds] as [String: Any] },
             "tracks": seq.tracks.map { track -> [String: Any] in
                 return [
                     "id": track.id.uuidString, 
                     "name": track.name, 
                     "type": track.type.rawValue,
-                    "clips": track.clips.map { c -> [String: Any] in
-                        return ["id": c.id.uuidString, "name": c.name, "start": c.startTime, "duration": c.duration, "opacity": c.opacity]
+                    "clips": track.clips.sorted(by: { $0.startTime < $1.startTime }).map { c -> [String: Any] in
+                        var info: [String: Any] = [
+                            "id": c.id.uuidString, "name": c.name,
+                            "start": c.startTime, "end": c.endTime, "duration": c.duration,
+                            "sourceIn": c.sourceInPoint, "sourceOut": c.sourceOutPoint,
+                            "opacity": c.opacity, "scale": c.transform.scaleX, "rotation": c.transform.rotationDegrees,
+                            "positionX": c.transform.positionX, "positionY": c.transform.positionY
+                        ]
+                        if c.playbackRate != 1 { info["speed"] = c.playbackRate }
+                        if let t = c.title { info["title"] = ["text": t.text, "font": t.font, "size": t.size, "color": t.color] as [String: Any] }
+                        if let tr = c.transitionIn { info["transitionIn"] = ["type": tr.type, "duration": tr.duration] as [String: Any] }
+                        if let fx = c.effects, !fx.isEmpty {
+                            info["effects"] = fx.map { ["instanceID": $0.id.uuidString, "effectID": $0.effectID, "enabled": $0.enabled, "params": $0.params] as [String: Any] }
+                        }
+                        if let anim = c.animation, !anim.isEmpty {
+                            info["keyframedProperties"] = AnimatableProperty.allCases.filter { !anim.keys(for: $0).isEmpty }.map(\.rawValue)
+                        }
+                        if c.mediaAssetID != Clip.titleAssetID { info["mediaAssetID"] = c.mediaAssetID.uuidString }
+                        return info
                     }
                 ]
             }

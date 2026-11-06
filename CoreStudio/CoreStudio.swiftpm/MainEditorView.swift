@@ -5,6 +5,7 @@ struct MainEditorView: View {
     @State private var showAgentPanel = false
     @State private var showExport = false
     @FocusState private var isTyping: Bool
+    @FocusState private var editorFocused: Bool
 
     @State private var selectedFormat: SequenceFormat = .widescreen16x9
 
@@ -32,7 +33,7 @@ struct MainEditorView: View {
 
                         if showAgentPanel {
                             AIAgentPanelView(isTyping: $isTyping)
-                                .frame(width: available * 0.24)
+                                .frame(width: available * 0.30)
                                 .dsPanel()
                                 .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
@@ -51,6 +52,15 @@ struct MainEditorView: View {
                 .padding(.bottom, gap)
             }
             .background(DS.Palette.canvas.ignoresSafeArea())
+            // The whole editor takes keyboard focus so single-key shortcuts work
+            .focusable()
+            .focusEffectDisabled()
+            .focused($editorFocused)
+            .onKeyPress(phases: .down) { press in handleKey(press) }
+            .onAppear { editorFocused = true }
+            .onChange(of: isTyping) { _, typing in
+                if !typing { editorFocused = true }
+            }
         }
         .sheet(isPresented: $editorState.showShortcuts) {
             ShortcutsView()
@@ -156,9 +166,7 @@ struct MainEditorView: View {
 
             IconButton(systemName: "keyboard") { editorState.showShortcuts = true }
 
-            IconButton(systemName: "cpu", isActive: showAgentPanel) {
-                withAnimation(.easeInOut(duration: 0.2)) { showAgentPanel.toggle() }
-            }
+            IconButton(systemName: "terminal", isActive: showAgentPanel) { toggleTerminal() }
 
             Button {
                 showExport = true
@@ -175,69 +183,75 @@ struct MainEditorView: View {
     // Hidden buttons; holding ⌘ on an iPad keyboard lists the ⌘ ones.
 
     private var keyboardShortcuts: some View {
+        // ⌘ shortcuts: hidden buttons (iPadOS lists these when you hold ⌘).
+        // Single keys (Space, J, K, L, arrows...) are handled in handleKey(_:).
         ZStack {
-            // Playback & navigation
             Group {
-                Button("Play / Pause") { editorState.togglePlayPause() }.keyboardShortcut(.space, modifiers: [])
-                Button("Play Backward") { editorState.handleJ() }.keyboardShortcut("j", modifiers: [])
-                Button("Stop") { editorState.handleK() }.keyboardShortcut("k", modifiers: [])
-                Button("Play Forward") { editorState.handleL() }.keyboardShortcut("l", modifiers: [])
-                Button("Back 1 Frame") { editorState.stepFrames(-1) }.keyboardShortcut(.leftArrow, modifiers: [])
-                Button("Forward 1 Frame") { editorState.stepFrames(1) }.keyboardShortcut(.rightArrow, modifiers: [])
-                Button("Back 5 Frames") { editorState.stepFrames(-5) }.keyboardShortcut(.leftArrow, modifiers: [.shift])
-                Button("Forward 5 Frames") { editorState.stepFrames(5) }.keyboardShortcut(.rightArrow, modifiers: [.shift])
-                Button("Previous Edit") { editorState.goToEditPoint(next: false) }.keyboardShortcut(.upArrow, modifiers: [])
-                Button("Next Edit") { editorState.goToEditPoint(next: true) }.keyboardShortcut(.downArrow, modifiers: [])
-            }
-            Group {
-                Button("Go to Start") { editorState.goToStart() }.keyboardShortcut(.home, modifiers: [])
-                Button("Go to End") { editorState.goToEnd() }.keyboardShortcut(.end, modifiers: [])
-                Button("Mark In") { editorState.markIn() }.keyboardShortcut("i", modifiers: [])
-                Button("Mark Out") { editorState.markOut() }.keyboardShortcut("o", modifiers: [])
-                Button("Go to In") { editorState.goToIn() }.keyboardShortcut("i", modifiers: [.shift])
-                Button("Go to Out") { editorState.goToOut() }.keyboardShortcut("o", modifiers: [.shift])
                 Button("Clear In and Out") { editorState.clearInOut() }.keyboardShortcut("x", modifiers: [.command, .shift])
-            }
-            // Tools
-            Group {
-                Button("Selection Tool") { editorState.activeTool = .select }.keyboardShortcut("v", modifiers: [])
-                Button("Razor Tool") { editorState.activeTool = .blade }.keyboardShortcut("c", modifiers: [])
-                Button("Type Tool (Add Title)") { editorState.addTitle() }.keyboardShortcut("t", modifiers: [])
-            }
-            // Editing
-            Group {
                 Button("Add Edit") { editorState.addEdit(allTracks: false) }.keyboardShortcut("k", modifiers: [.command])
                 Button("Add Edit to All Tracks") { editorState.addEdit(allTracks: true) }.keyboardShortcut("k", modifiers: [.command, .shift])
-                Button("Ripple Trim Previous Edit to Playhead") { editorState.rippleTrim(.start) }.keyboardShortcut("q", modifiers: [])
-                Button("Ripple Trim Next Edit to Playhead") { editorState.rippleTrim(.end) }.keyboardShortcut("w", modifiers: [])
-                Button("Clear") { editorState.deleteSelected() }.keyboardShortcut(.delete, modifiers: [])
-                Button("Clear (Forward Delete)") { editorState.deleteSelected() }.keyboardShortcut(.deleteForward, modifiers: [])
-                Button("Ripple Delete") { editorState.rippleDeleteSelected() }.keyboardShortcut(.delete, modifiers: [.shift])
-                Button("Nudge Left") { editorState.nudgeSelected(frames: -1) }.keyboardShortcut(.leftArrow, modifiers: [.option])
-                Button("Nudge Right") { editorState.nudgeSelected(frames: 1) }.keyboardShortcut(.rightArrow, modifiers: [.option])
                 Button("Apply Video Transition") { editorState.applyDefaultTransition() }.keyboardShortcut("d", modifiers: [.command])
-            }
-            Group {
                 Button("Copy") { editorState.copySelected() }.keyboardShortcut("c", modifiers: [.command])
                 Button("Cut") { editorState.cutSelected() }.keyboardShortcut("x", modifiers: [.command])
                 Button("Paste") { editorState.pasteAtPlayhead() }.keyboardShortcut("v", modifiers: [.command])
                 Button("Undo") { editorState.undo() }.keyboardShortcut("z", modifiers: [.command])
                 Button("Redo") { editorState.redo() }.keyboardShortcut("z", modifiers: [.command, .shift])
             }
-            // View & file
             Group {
-                Button("Zoom In") { editorState.zoomIn() }.keyboardShortcut("=", modifiers: [])
-                Button("Zoom In ") { editorState.zoomIn() }.keyboardShortcut("+", modifiers: [])
-                Button("Zoom Out") { editorState.zoomOut() }.keyboardShortcut("-", modifiers: [])
-                Button("Zoom to Sequence") { editorState.zoomToFit() }.keyboardShortcut("\\", modifiers: [])
                 Button("Save") { editorState.saveNow() }.keyboardShortcut("s", modifiers: [.command])
                 Button("Export Media") { showExport = true }.keyboardShortcut("m", modifiers: [.command])
                 Button("Export") { showExport = true }.keyboardShortcut("e", modifiers: [.command])
+                Button("Terminal") { toggleTerminal() }.keyboardShortcut("j", modifiers: [.command])
                 Button("Keyboard Shortcuts") { editorState.showShortcuts = true }.keyboardShortcut("/", modifiers: [.command])
             }
         }
         .opacity(0)
         .disabled(isTyping)
+    }
+
+    private func toggleTerminal() {
+        withAnimation(.easeInOut(duration: 0.2)) { showAgentPanel.toggle() }
+    }
+
+    /// Single-key shortcuts, Premiere Pro layout.
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        // Typing in a text field: let the field have the keys
+        if isTyping { return .ignored }
+        let mods = press.modifiers
+        if mods.contains(.command) || mods.contains(.control) { return .ignored }
+        let shift = mods.contains(.shift)
+        let option = mods.contains(.option)
+        let e = editorState
+
+        switch press.key {
+        case .space: e.togglePlayPause(); return .handled
+        case .leftArrow: option ? e.nudgeSelected(frames: -1) : e.stepFrames(shift ? -5 : -1); return .handled
+        case .rightArrow: option ? e.nudgeSelected(frames: 1) : e.stepFrames(shift ? 5 : 1); return .handled
+        case .upArrow: e.goToEditPoint(next: false); return .handled
+        case .downArrow: e.goToEditPoint(next: true); return .handled
+        case .home: e.goToStart(); return .handled
+        case .end: e.goToEnd(); return .handled
+        case .delete, .deleteForward: shift ? e.rippleDeleteSelected() : e.deleteSelected(); return .handled
+        default: break
+        }
+
+        switch press.characters.lowercased() {
+        case "j": e.handleJ()
+        case "k": e.handleK()
+        case "l": e.handleL()
+        case "i": shift ? e.goToIn() : e.markIn()
+        case "o": shift ? e.goToOut() : e.markOut()
+        case "v": e.activeTool = .select
+        case "c": e.activeTool = .blade
+        case "t": e.addTitle()
+        case "q": e.rippleTrim(.start)
+        case "w": e.rippleTrim(.end)
+        case "=", "+": e.zoomIn()
+        case "-", "_": e.zoomOut()
+        case "\\": e.zoomToFit()
+        default: return .ignored
+        }
+        return .handled
     }
 }
 
@@ -369,7 +383,7 @@ struct ShortcutsView: View {
                      ("⌥ ← →", "Nudge clip 1 frame"), ("⌘D", "Apply Cross Dissolve"),
                      ("⌘C  ⌘X  ⌘V", "Copy / cut / paste at playhead"), ("⌘Z  ⌘⇧Z", "Undo / redo")]),
         ("View & File", [("=  −", "Zoom timeline in / out"), ("\\", "Zoom to sequence"),
-                         ("⌘S", "Save"), ("⌘M", "Export media"), ("⌘/", "This list")])
+                         ("⌘S", "Save"), ("⌘M", "Export media"), ("⌘J", "Terminal / Claude"), ("⌘/", "This list")])
     ]
 
     var body: some View {
