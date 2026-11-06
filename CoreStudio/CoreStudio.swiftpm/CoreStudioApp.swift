@@ -107,6 +107,7 @@ final class EditorState: ObservableObject {
         
         commandRegistry.registerStandardCommands()
         commandRegistry.registerAnimationCommands()
+        commandRegistry.registerEffectCommands()
         
         playbackEngine.onTimeChanged = { [weak self] time in
             // FIX: ignore invalid/unchanged times so we don't re-render the whole UI for nothing

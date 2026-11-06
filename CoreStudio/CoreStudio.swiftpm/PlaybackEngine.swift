@@ -10,7 +10,7 @@ final class PlaybackEngine: ObservableObject {
     var onStatusChanged: ((Bool) -> Void)?
     
     private var composition: AVMutableComposition?
-    private var videoComposition: AVMutableVideoComposition?
+    private var videoComposition: AVVideoComposition?
     private var timeObserver: Any?
     private var statusObserver: NSKeyValueObservation?
     private var currentRate: Float = 0.0
@@ -75,197 +75,130 @@ final class PlaybackEngine: ObservableObject {
         player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
+    /// The last built timeline, for export.
+    func exportAssets() -> (AVComposition, AVVideoComposition?)? {
+        guard let composition else { return nil }
+        let frozen: AVComposition = (composition.copy() as? AVComposition) ?? composition
+        return (frozen, videoComposition)
+    }
+
+    /// Rebuilds what the player plays from the edit.
+    /// Audio and video are laid out in an AVComposition; the picture of every frame is
+    /// then drawn by CoreStudioCompositor from the plan (CompositionInstruction) built here.
     func updateComposition(sequence: EditSequence, mediaAssets: [MediaAsset]) {
+        CrashReporter.log("rebuild composition: \(sequence.tracks.map { $0.clips.count }) clips, \(sequence.width)x\(sequence.height)")
         let newComposition = AVMutableComposition()
         let renderSize = CGSize(width: sequence.width, height: sequence.height)
-        
-        CrashReporter.log("rebuild composition: \(sequence.tracks.map { $0.clips.count }) clips, \(sequence.width)x\(sequence.height)")
-        // FIX: never crash on duplicate asset IDs
         let assetMap = Dictionary(mediaAssets.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let docsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        
-        var compositionTracks: [UUID: AVMutableCompositionTrack] = [:]
-        var times = Set<Double>()
-        times.insert(0) // Ensure instruction spans from 0
-        
-        var hasVideoClips = false
-        
-        // 1. Map assets into Composition Tracks
-        for track in sequence.tracks {
-            guard !track.isMuted else { continue }
-            let trackType: AVMediaType = (track.type == .video) ? .video : .audio
-            guard let compTrack = newComposition.addMutableTrack(withMediaType: trackType, preferredTrackID: kCMPersistentTrackID_Invalid) else { continue }
-            compositionTracks[track.id] = compTrack
 
-            // FIX: insert clips in time order, otherwise insertTimeRange shifts clips that were inserted earlier
-            var trackEnd: Double = 0
+        struct Placed { let clip: Clip; let compTrackID: CMPersistentTrackID; let preferredTransform: CGAffineTransform; let naturalSize: CGSize }
+        // Video clips actually placed, per editor track (bottom track first)
+        var placedVideo: [UUID: [Placed]] = [:]
+        var cutTimes = Set<Double>([0])
+
+        for track in sequence.tracks where !track.isMuted {
+            let mediaType: AVMediaType = track.type == .video ? .video : .audio
+            guard let compTrack = newComposition.addMutableTrack(withMediaType: mediaType, preferredTrackID: kCMPersistentTrackID_Invalid) else { continue }
+
+            // Clips are inserted in time order; overlapping clips on one track are skipped
+            var trackEnd = 0.0
             for clip in track.clips.sorted(by: { $0.startTime < $1.startTime }) {
-                guard let assetInfo = assetMap[clip.mediaAssetID] else { continue }
-                let fileURL = docsDirectory.appendingPathComponent(assetInfo.relativePath)
-                guard FileManager.default.fileExists(atPath: fileURL.path) else {
-                    CrashReporter.log("missing media file: \(assetInfo.relativePath)")
+                guard let info = assetMap[clip.mediaAssetID] else { continue }
+                let url = docsDirectory.appendingPathComponent(info.relativePath)
+                guard FileManager.default.fileExists(atPath: url.path) else {
+                    CrashReporter.log("missing media file: \(info.relativePath)")
                     continue
                 }
-                let avAsset = AVURLAsset(url: fileURL)
-                guard let sourceTrack = avAsset.tracks(withMediaType: trackType).first else { continue }
-
-                // FIX: skip clips that overlap the previous clip on the same track (insertTimeRange would push them around)
+                let asset = AVURLAsset(url: url)
+                // A video clip on a video track brings its picture; on an audio track, its sound
+                guard let source = asset.tracks(withMediaType: mediaType).first else { continue }
                 guard clip.startTime >= trackEnd - 0.001, clip.sourceDuration > 0.01 else {
                     CrashReporter.log("skipped overlapping clip \(clip.name)")
                     continue
                 }
-                // FIX: clamp the source range to the real media length
-                let sourceLength = sourceTrack.timeRange.end.seconds
+
+                let sourceLength = source.timeRange.end.seconds
                 let srcIn = max(0, min(clip.sourceInPoint, sourceLength))
                 let srcDur = max(0, min(clip.sourceDuration, sourceLength - srcIn))
                 guard srcDur > 0.01 else { continue }
-                // Speed: the source span is inserted, then stretched/squeezed to its timeline length
                 let timelineDur = srcDur / clip.playbackRate
-                trackEnd = clip.startTime + timelineDur
-
+                let at = CMTime(seconds: clip.startTime, preferredTimescale: 600)
                 let sourceRange = CMTimeRange(start: CMTime(seconds: srcIn, preferredTimescale: 600),
                                               duration: CMTime(seconds: srcDur, preferredTimescale: 600))
-                let startTime = CMTime(seconds: clip.startTime, preferredTimescale: 600)
-
                 do {
-                    try compTrack.insertTimeRange(sourceRange, of: sourceTrack, at: startTime)
+                    try compTrack.insertTimeRange(sourceRange, of: source, at: at)
                     if abs(clip.playbackRate - 1) > 0.0001 {
-                        compTrack.scaleTimeRange(CMTimeRange(start: startTime, duration: sourceRange.duration),
+                        compTrack.scaleTimeRange(CMTimeRange(start: at, duration: sourceRange.duration),
                                                  toDuration: CMTime(seconds: timelineDur, preferredTimescale: 600))
                     }
-                    if trackType == .video {
-                        hasVideoClips = true
-                        times.insert(clip.startTime)
-                        times.insert(clip.startTime + timelineDur)
-                    }
                 } catch {
-                    print("Failed to insert track slice: \(error)")
+                    CrashReporter.log("insert failed for \(clip.name): \(error.localizedDescription)")
+                    continue
+                }
+                trackEnd = clip.startTime + timelineDur
+
+                if mediaType == .video {
+                    var placedClip = clip
+                    // What was really inserted (media may be shorter than the clip claims)
+                    placedClip.sourceInPoint = srcIn
+                    placedClip.sourceOutPoint = srcIn + srcDur
+                    placedVideo[track.id, default: []].append(Placed(clip: placedClip, compTrackID: compTrack.trackID,
+                                                                     preferredTransform: source.preferredTransform,
+                                                                     naturalSize: source.naturalSize))
+                    cutTimes.insert(clip.startTime)
+                    cutTimes.insert(clip.startTime + timelineDur)
                 }
             }
         }
-        
-        if !hasVideoClips {
-            self.composition = newComposition
+
+        self.composition = newComposition
+        let item = AVPlayerItem(asset: newComposition)
+        item.audioTimePitchAlgorithm = .spectral // natural voices when speed changes
+
+        let total = newComposition.duration.seconds
+        guard !placedVideo.isEmpty, total > 0.01 else {
             self.videoComposition = nil
-            let playerItem = AVPlayerItem(asset: newComposition)
-            playerItem.audioTimePitchAlgorithm = .spectral // keep voices natural when speed changes
-            self.player.replaceCurrentItem(with: playerItem)
+            player.replaceCurrentItem(with: item)
+            CrashReporter.log("rebuild done (audio only), \(total)s")
             return
         }
-        
-        let newVideoComposition = AVMutableVideoComposition()
-        newVideoComposition.renderSize = renderSize
-        // FIX: works for fractional rates like 29.97 too
-        newVideoComposition.frameDuration = CMTime(seconds: 1.0 / sequence.frameRate, preferredTimescale: 60000)
-        
-        // 2. Resolve AVVideoComposition overlaps and transforms
-        var instructions: [AVMutableVideoCompositionInstruction] = []
-        // FIX: instructions must cover the WHOLE composition with no gaps (including audio that runs past the last video clip)
-        let totalDuration = newComposition.duration.seconds
-        times.insert(totalDuration)
-        var sortedTimes: [Double] = []
-        for t in times.sorted() where t <= totalDuration {
-            if let last = sortedTimes.last, t - last < 0.01 { continue }
-            sortedTimes.append(t)
+
+        // The plan: contiguous time ranges covering the whole timeline, each listing the
+        // clips on screen in it, bottom track first.
+        var cuts: [Double] = []
+        for t in cutTimes.sorted() where t < total - 0.0005 {
+            if let last = cuts.last, t - last < 0.001 { continue }
+            cuts.append(t)
         }
-        if sortedTimes.count > 1 { sortedTimes[sortedTimes.count - 1] = totalDuration }
-        
-        // Render Order: High track index (e.g. Video 2) is visually ON TOP of lower track index (e.g. Video 1).
-        // For layerInstructions, index 0 is at the top. So we reverse the video tracks array.
-        // FIX: was `filter { 0.isMuted }` (doesn't compile). Only unmuted VIDEO tracks get layer instructions.
-        let videoTracks = sequence.tracks.filter { $0.type == .video && !$0.isMuted }.reversed()
-        
-        for i in 0..<max(0, sortedTimes.count - 1) {
-            let start = sortedTimes[i]
-            let end = sortedTimes[i+1]
-            let mid = (start + end) / 2.0
-            
-            let instruction = AVMutableVideoCompositionInstruction()
-            // FIX: start/end (not start/duration) so neighbouring instructions touch exactly, no rounding gaps
-            let endCM = (i == sortedTimes.count - 2) ? newComposition.duration : CMTime(seconds: end, preferredTimescale: 600)
-            instruction.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600), end: endCM)
-            
-            var layerInstructions: [AVVideoCompositionLayerInstruction] = []
-            
-            for track in videoTracks {
-                if let clip = track.clips.first(where: { mid >= $0.startTime && mid <= $0.endTime }),
-                   let compTrack = compositionTracks[track.id],
-                   let assetInfo = assetMap[clip.mediaAssetID] {
-                    
-                    let fileURL = docsDirectory.appendingPathComponent(assetInfo.relativePath)
-                    let avAsset = AVURLAsset(url: fileURL)
-                    guard let sourceTrack = avAsset.tracks(withMediaType: .video).first else { continue }
-                    
-                    let layerInst = AVMutableVideoCompositionLayerInstruction(assetTrack: compTrack)
-                    
-                    // Matrix Transform Logic: Center + Aspect Fit + User Adjustments
-                    let prefXform = sourceTrack.preferredTransform
-                    let isPortrait = abs(prefXform.a) < 0.1 && abs(prefXform.d) < 0.1
-                    let trackWidth = isPortrait ? sourceTrack.naturalSize.height : sourceTrack.naturalSize.width
-                    let trackHeight = isPortrait ? sourceTrack.naturalSize.width : sourceTrack.naturalSize.height
-                    
-                    let fitScale = min(renderSize.width / trackWidth, renderSize.height / trackHeight)
-                    
-                    let transformedBounds = CGRect(origin: .zero, size: sourceTrack.naturalSize).applying(prefXform)
+        cuts.append(total)
 
-                    // The clip's picture transform at a timeline time (keyframes included).
-                    func xform(at t: Double) -> CGAffineTransform {
-                        let userScale = CGFloat(clip.value(of: .scale, atTimeline: t))
-                        let userRot = CGFloat(clip.value(of: .rotation, atTimeline: t)) * .pi / 180.0
-                        let centerX = renderSize.width / 2.0 + CGFloat(clip.value(of: .positionX, atTimeline: t))
-                        let centerY = renderSize.height / 2.0 + CGFloat(clip.value(of: .positionY, atTimeline: t))
-                        var m = CGAffineTransform(translationX: centerX, y: centerY)
-                        m = m.rotated(by: userRot)
-                        m = m.scaledBy(x: fitScale * userScale, y: fitScale * userScale)
-                        m = m.translatedBy(x: -transformedBounds.midX, y: -transformedBounds.midY)
-                        return prefXform.concatenating(m)
-                    }
-                    func alpha(at t: Double) -> Float { Float(clip.value(of: .opacity, atTimeline: t)) }
-
-                    if let anim = clip.animation, !anim.isEmpty {
-                        // Keyframes: AVFoundation only does straight-line ramps, so the
-                        // eased curve is approximated by short ramps (15 per second).
-                        let step = 1.0 / 15.0
-                        var t0 = start
-                        while t0 < end - 0.0001 {
-                            let t1 = min(end, t0 + step)
-                            let range = CMTimeRange(start: CMTime(seconds: t0, preferredTimescale: 600),
-                                                    end: CMTime(seconds: t1, preferredTimescale: 600))
-                            layerInst.setTransformRamp(fromStart: xform(at: t0), toEnd: xform(at: t1), timeRange: range)
-                            layerInst.setOpacityRamp(fromStartOpacity: alpha(at: t0), toEndOpacity: alpha(at: t1), timeRange: range)
-                            t0 = t1
-                        }
-                    } else {
-                        let cmStart = CMTime(seconds: start, preferredTimescale: 600)
-                        layerInst.setTransform(xform(at: start), at: cmStart)
-                        layerInst.setOpacity(alpha(at: start), at: cmStart)
-                    }
-                    
-                    layerInstructions.append(layerInst)
+        let videoTrackOrder = sequence.tracks.filter { $0.type == .video && !$0.isMuted }.map(\.id)
+        var instructions: [CompositionInstruction] = []
+        for i in 0..<(cuts.count - 1) {
+            let start = cuts[i], end = cuts[i + 1]
+            let mid = (start + end) / 2
+            var layers: [RenderLayer] = []
+            for trackID in videoTrackOrder {
+                if let p = placedVideo[trackID]?.first(where: { mid >= $0.clip.startTime && mid < $0.clip.endTime }) {
+                    layers.append(RenderLayer(trackID: p.compTrackID, clip: p.clip,
+                                              preferredTransform: p.preferredTransform, naturalSize: p.naturalSize))
                 }
             }
-            
-            instruction.layerInstructions = layerInstructions // Empty array naturally creates a black background gap
-            instructions.append(instruction)
+            let startCM = CMTime(seconds: start, preferredTimescale: 600)
+            let endCM = i == cuts.count - 2 ? newComposition.duration : CMTime(seconds: end, preferredTimescale: 600)
+            instructions.append(CompositionInstruction(timeRange: CMTimeRange(start: startCM, end: endCM), layers: layers))
         }
 
-        newVideoComposition.instructions = instructions
-        self.composition = newComposition
+        let videoComposition = AVMutableVideoComposition()
+        videoComposition.customVideoCompositorClass = CoreStudioCompositor.self
+        videoComposition.renderSize = renderSize
+        videoComposition.frameDuration = CMTime(seconds: 1.0 / max(1, sequence.frameRate), preferredTimescale: 60000)
+        videoComposition.instructions = instructions
 
-        let playerItem = AVPlayerItem(asset: newComposition)
-        playerItem.audioTimePitchAlgorithm = .spectral
-        // FIX: an invalid video composition throws an exception that kills the app instantly.
-        // Validate first; if it's invalid, play without transforms/layering instead of crashing.
-        let fullRange = CMTimeRange(start: .zero, duration: newComposition.duration)
-        if newVideoComposition.isValid(for: newComposition, timeRange: fullRange, validationDelegate: nil) {
-            self.videoComposition = newVideoComposition
-            playerItem.videoComposition = newVideoComposition
-        } else {
-            self.videoComposition = nil
-            CrashReporter.log("video composition INVALID, playing without it (\(instructions.count) instructions)")
-        }
-        self.player.replaceCurrentItem(with: playerItem)
-        CrashReporter.log("rebuild composition done, duration \(newComposition.duration.seconds)s")
+        self.videoComposition = videoComposition
+        item.videoComposition = videoComposition
+        player.replaceCurrentItem(with: item)
+        CrashReporter.log("rebuild done: \(instructions.count) segments, \(total)s")
     }
 }
-

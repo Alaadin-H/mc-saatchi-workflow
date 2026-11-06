@@ -25,50 +25,44 @@ struct MediaBinView: View {
     @State private var showDocumentPicker = false
 
     var body: some View {
-        VStack {
-            HStack {
-                Text("Media Bin").font(.subheadline).bold()
-                Spacer()
-
+        VStack(spacing: 0) {
+            PanelHeader(title: "Media", icon: "square.stack") {
                 PhotosPicker(selection: $selectedPhotoItem, matching: .videos) {
                     Image(systemName: "photo.on.rectangle")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(DS.Palette.textPrimary)
+                        .frame(width: 28, height: 28)
                 }
-                .onChange(of: selectedPhotoItem) { _, newItem in
-                    guard let newItem else { return }
-                    CrashReporter.log("photos import started")
-                    Task {
-                        do {
-                            if let data = try await newItem.loadTransferable(type: VideoTransferable.self) {
-                                // FIX: UI/project changes must happen on the main thread
-                                await MainActor.run { importMedia(from: data.url) }
-                            } else {
-                                CrashReporter.log("photos import: no data")
-                            }
-                        } catch {
-                            CrashReporter.log("photos import failed: \(error.localizedDescription)")
+                IconButton(systemName: "folder.badge.plus", size: 28) { showDocumentPicker = true }
+            }
+            .onChange(of: selectedPhotoItem) { _, newItem in
+                guard let newItem else { return }
+                CrashReporter.log("photos import started")
+                Task {
+                    do {
+                        if let data = try await newItem.loadTransferable(type: VideoTransferable.self) {
+                            await MainActor.run { importMedia(from: data.url) }
+                        } else {
+                            CrashReporter.log("photos import: no data")
+                        }
+                    } catch {
+                        CrashReporter.log("photos import failed: \(error.localizedDescription)")
+                    }
+                }
+            }
+
+            if editorState.project.mediaAssets.isEmpty {
+                EmptyState(icon: "film", title: "No media yet", message: "Import videos from Photos or Files")
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: DS.Space.xs) {
+                        ForEach(editorState.project.mediaAssets) { asset in
+                            MediaRow(asset: asset) { addAssetToTimeline(asset) }
                         }
                     }
-                }
-
-                Button(action: { showDocumentPicker = true }) { Image(systemName: "folder.badge.plus") }
-            }
-            .padding([.top, .horizontal])
-
-            List(editorState.project.mediaAssets) { asset in
-                HStack {
-                    Image(systemName: asset.type == .video ? "video.fill" : "music.note")
-                        .foregroundColor(.blue)
-                    
-                    VStack(alignment: .leading) {
-                        Text(asset.name).font(.caption).lineLimit(1)
-                        Text(String(format: "%.1fs", asset.durationSeconds))
-                            .font(.caption2).foregroundColor(.gray)
-                    }
-                    Spacer()
-                    Button(action: { addAssetToTimeline(asset) }) { Image(systemName: "plus.circle") }
+                    .padding(DS.Space.s)
                 }
             }
-            .listStyle(.plain)
         }
         .sheet(isPresented: $showDocumentPicker) {
             DocumentPicker { url in importMedia(from: url) }
@@ -93,3 +87,29 @@ struct MediaBinView: View {
     }
 }
 
+
+struct MediaRow: View {
+    let asset: MediaAsset
+    let onAdd: () -> Void
+
+    var body: some View {
+        HStack(spacing: DS.Space.s) {
+            RoundedRectangle(cornerRadius: DS.Radius.s, style: .continuous)
+                .fill(asset.type == .video ? DS.Palette.videoClip.opacity(0.25) : DS.Palette.audioClip.opacity(0.25))
+                .frame(width: 44, height: 30)
+                .overlay(
+                    Image(systemName: asset.type == .video ? "video.fill" : "waveform")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(asset.type == .video ? DS.Palette.videoClipSelected : DS.Palette.audioClipSelected)
+                )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(asset.name).font(DS.Typo.label).foregroundColor(DS.Palette.textPrimary).lineLimit(1)
+                Text(String(format: "%.1fs", asset.durationSeconds)).font(DS.Typo.caption).foregroundColor(DS.Palette.textTertiary)
+            }
+            Spacer(minLength: 0)
+            IconButton(systemName: "plus", tint: DS.Palette.accent, size: 26, action: onAdd)
+        }
+        .padding(DS.Space.s)
+        .background(RoundedRectangle(cornerRadius: DS.Radius.m, style: .continuous).fill(DS.Palette.raised))
+    }
+}

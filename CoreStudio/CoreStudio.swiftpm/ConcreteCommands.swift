@@ -438,7 +438,7 @@ class SplitClipAtTimeCommand: EditorCommand {
                 project.sequences[seqIdx].tracks[tIdx].clips[cIdx].animation = original.animation?.slice(from: 0, to: splitFraction)
                 let newID = UUID()
                 createdClipID = newID
-                let secondClip = Clip(id: newID, mediaAssetID: original.mediaAssetID, name: "\(original.name) (Part 2)", startTime: splitTime, sourceInPoint: sourceSplit, sourceOutPoint: original.sourceOutPoint, opacity: original.opacity, transform: original.transform, speed: original.speed, animation: original.animation?.slice(from: splitFraction, to: 1))
+                let secondClip = Clip(id: newID, mediaAssetID: original.mediaAssetID, name: "\(original.name) (Part 2)", startTime: splitTime, sourceInPoint: sourceSplit, sourceOutPoint: original.sourceOutPoint, opacity: original.opacity, transform: original.transform, speed: original.speed, animation: original.animation?.slice(from: splitFraction, to: 1), effects: original.effects)
                 project.sequences[seqIdx].tracks[tIdx].clips.append(secondClip)
                 return .success("Split clip at \(splitTime)s")
             }

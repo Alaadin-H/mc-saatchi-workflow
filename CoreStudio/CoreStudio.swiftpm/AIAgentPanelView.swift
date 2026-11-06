@@ -9,13 +9,8 @@ struct AIAgentPanelView: View {
     @State private var executionResult: String = ""
 
     var body: some View {
-        VStack(alignment: .leading) {
-            HStack {
-                Image(systemName: "cpu").foregroundColor(.green)
-                Text("AI Agent Tester").font(.subheadline).bold()
-            }.padding([.top, .horizontal])
-            
-            Divider()
+        VStack(alignment: .leading, spacing: 0) {
+            PanelHeader(title: "AI Agent", icon: "cpu")
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -40,7 +35,7 @@ struct AIAgentPanelView: View {
                             case .success(let msg): executionResult = "✅ \(msg)"
                             case .failure(let err): executionResult = "❌ \(err.localizedDescription)"
                             }
-                        }.buttonStyle(.borderedProminent)
+                        }.buttonStyle(DSButtonStyle(kind: .primary))
                         
                         if !executionResult.isEmpty {
                             Text(executionResult).font(.caption).foregroundColor(.secondary).textSelection(.enabled)
@@ -58,7 +53,7 @@ struct AIAgentPanelView: View {
                             if case .success(let json) = res {
                                 executionResult = json
                             }
-                        }.buttonStyle(.bordered)
+                        }.buttonStyle(DSButtonStyle())
                     }
                     .padding(.horizontal)
                     
@@ -76,7 +71,6 @@ struct AIAgentPanelView: View {
                 .padding(.vertical)
             }
         }
-        .background(Color(UIColor.tertiarySystemBackground))
     }
 }
 

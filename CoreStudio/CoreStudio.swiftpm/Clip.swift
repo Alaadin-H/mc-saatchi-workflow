@@ -35,6 +35,8 @@ struct Clip: Identifiable, Codable, Hashable {
     var speed: Double?
     /// Keyframes. nil means "not animated" (and keeps older project files loading).
     var animation: ClipAnimation?
+    /// Effects, applied top to bottom. nil = none (keeps older project files loading).
+    var effects: [AppliedEffect]?
 
     static let speedRange: ClosedRange<Double> = 0.1...16
 
@@ -46,7 +48,7 @@ struct Clip: Identifiable, Codable, Hashable {
     var duration: Double { sourceDuration / playbackRate }
     var endTime: Double { startTime + duration }
 
-    init(id: UUID = UUID(), mediaAssetID: UUID, name: String, startTime: Double, sourceInPoint: Double, sourceOutPoint: Double, opacity: Double = 1.0, transform: ClipTransform = ClipTransform(), speed: Double? = nil, animation: ClipAnimation? = nil) {
+    init(id: UUID = UUID(), mediaAssetID: UUID, name: String, startTime: Double, sourceInPoint: Double, sourceOutPoint: Double, opacity: Double = 1.0, transform: ClipTransform = ClipTransform(), speed: Double? = nil, animation: ClipAnimation? = nil, effects: [AppliedEffect]? = nil) {
         self.id = id
         self.mediaAssetID = mediaAssetID
         self.name = name
@@ -57,6 +59,7 @@ struct Clip: Identifiable, Codable, Hashable {
         self.transform = transform
         self.speed = speed
         self.animation = animation
+        self.effects = effects
     }
 }
 

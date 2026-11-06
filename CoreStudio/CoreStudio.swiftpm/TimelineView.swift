@@ -10,68 +10,60 @@ struct TimelineView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Timeline").font(.caption).bold()
-                Spacer()
-                Slider(value: $editorState.zoomScale, in: 5...100).frame(width: 120)
+            PanelHeader(title: "Timeline", icon: "timeline.selection") {
+                HStack(spacing: DS.Space.xs) {
+                    IconButton(systemName: "minus.magnifyingglass", tint: DS.Palette.textSecondary, size: 28) { editorState.zoomOut() }
+                    Slider(value: $editorState.zoomScale, in: 5...100)
+                        .frame(width: 110)
+                        .tint(DS.Palette.accent)
+                    IconButton(systemName: "plus.magnifyingglass", tint: DS.Palette.textSecondary, size: 28) { editorState.zoomIn() }
+                }
             }
-            .padding(.horizontal)
-            .frame(height: 30)
-            .background(Color(UIColor.tertiarySystemBackground))
-            
-            Divider()
 
             if let sequence = activeSequence {
                 GeometryReader { geo in
-                    let effectiveScale = max(5, editorState.zoomScale * pinchScale)
-                    let totalDuration = TimelineEngine.calculateSequenceDuration(sequence: sequence)
-                    let timelineWidth = max(geo.size.width, TimelineEngine.secondsToPoints(seconds: totalDuration + 10, pointsPerSecond: effectiveScale))
+                    let scale = max(5, editorState.zoomScale * pinchScale)
+                    let total = TimelineEngine.calculateSequenceDuration(sequence: sequence)
+                    let width = max(geo.size.width, TimelineEngine.secondsToPoints(seconds: total + 10, pointsPerSecond: scale))
+
+                    // Visual order: highest video track on top, then audio
+                    let videoTracks = Array(sequence.tracks.filter { $0.type == .video }.reversed())
+                    let audioTracks = sequence.tracks.filter { $0.type == .audio }
+                    let tracks = videoTracks + audioTracks
+                    let tracksHeight = CGFloat(tracks.count) * (DS.Size.trackHeight + DS.Size.trackGap)
 
                     ScrollView([.horizontal, .vertical]) {
                         ZStack(alignment: .topLeading) {
-                            // Ruler
-                            Rectangle()
-                                .fill(Color(UIColor.separator))
-                                .frame(width: timelineWidth, height: 20)
-                                .gesture(
-                                    DragGesture(minimumDistance: 0).onChanged { val in
-                                        let t = TimelineEngine.pointsToSeconds(offset: val.location.x, pointsPerSecond: effectiveScale)
-                                        editorState.playbackEngine.seek(to: max(0, t))
-                                    }
-                                )
-                                
-                            // In & Out Marks
-                            if let inMark = editorState.inMark {
-                                Rectangle()
-                                    .fill(Color.cyan)
-                                    .frame(width: 2, height: 16)
-                                    .offset(x: TimelineEngine.secondsToPoints(seconds: inMark, pointsPerSecond: effectiveScale), y: 2)
-                            }
-                            if let outMark = editorState.outMark {
-                                Rectangle()
-                                    .fill(Color.cyan)
-                                    .frame(width: 2, height: 16)
-                                    .offset(x: TimelineEngine.secondsToPoints(seconds: outMark, pointsPerSecond: effectiveScale), y: 2)
-                            }
-                            
-                            // Visual track ordering: High video tracks on top (Video 2 > Video 1), then audio.
-                            let videoTracks = sequence.tracks.filter({ $0.type == .video }).reversed()
-                            let audioTracks = sequence.tracks.filter({ $0.type == .audio })
-                            let sortedTracks = Array(videoTracks) + Array(audioTracks)
-                            
-                            VStack(spacing: 8) {
-                                ForEach(sortedTracks) { track in
-                                    TrackRowView(track: track, pointsPerSecond: effectiveScale)
-                                        .frame(width: timelineWidth, height: 60)
-                                }
-                            }
-                            .padding(.top, 20)
+                            VStack(spacing: 0) {
+                                TimeRuler(width: width, pointsPerSecond: scale)
+                                    .contentShape(Rectangle())
+                                    .gesture(
+                                        DragGesture(minimumDistance: 0).onChanged { val in
+                                            let t = TimelineEngine.pointsToSeconds(offset: val.location.x, pointsPerSecond: scale)
+                                            editorState.playbackEngine.seek(to: max(0, t))
+                                        }
+                                    )
 
-                            // Playhead
-                            Rectangle()
-                                .fill(Color.red)
-                                .frame(width: 2, height: CGFloat(sequence.tracks.count * 68) + 20)
-                                .offset(x: TimelineEngine.secondsToPoints(seconds: editorState.currentTime, pointsPerSecond: effectiveScale))
+                                VStack(spacing: DS.Size.trackGap) {
+                                    ForEach(tracks) { track in
+                                        TrackRowView(track: track, pointsPerSecond: scale)
+                                            .frame(width: width, height: DS.Size.trackHeight)
+                                    }
+                                }
+                                .padding(.top, DS.Size.trackGap)
+                            }
+
+                            // In / out marks
+                            ForEach([editorState.inMark, editorState.outMark].compactMap { $0 }, id: \.self) { mark in
+                                Rectangle()
+                                    .fill(Color.cyan)
+                                    .frame(width: 2, height: DS.Size.rulerHeight)
+                                    .offset(x: TimelineEngine.secondsToPoints(seconds: mark, pointsPerSecond: scale))
+                            }
+
+                            Playhead(height: DS.Size.rulerHeight + tracksHeight + DS.Size.trackGap)
+                                .offset(x: TimelineEngine.secondsToPoints(seconds: editorState.currentTime, pointsPerSecond: scale) - 6)
+                                .allowsHitTesting(false)
                         }
                         .gesture(
                             MagnifyGesture().updating($pinchScale) { value, state, _ in
@@ -84,51 +76,143 @@ struct TimelineView: View {
                 }
             }
         }
-        .background(Color(UIColor.systemGroupedBackground))
     }
 }
+
+// MARK: - Ruler
+
+struct TimeRuler: View {
+    let width: CGFloat
+    let pointsPerSecond: CGFloat
+
+    /// Seconds between labelled ticks, chosen so labels stay ~80pt apart.
+    private var labelStep: Double {
+        let steps: [Double] = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
+        return steps.first { Double(pointsPerSecond) * $0 >= 80 } ?? 600
+    }
+
+    var body: some View {
+        let step = labelStep
+        let count = Int(Double(width) / (Double(pointsPerSecond) * step)) + 1
+
+        ZStack(alignment: .topLeading) {
+            DS.Palette.ruler
+            ForEach(0..<count, id: \.self) { i in
+                let t = Double(i) * step
+                let x = CGFloat(t) * pointsPerSecond
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(rulerLabel(t))
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(DS.Palette.textTertiary)
+                    Rectangle().fill(DS.Palette.strokeStrong).frame(width: 1, height: 6)
+                }
+                .offset(x: x + 3, y: 4)
+                Rectangle().fill(DS.Palette.strokeStrong).frame(width: 1, height: DS.Size.rulerHeight).offset(x: x)
+            }
+        }
+        .frame(width: width, height: DS.Size.rulerHeight)
+        .overlay(alignment: .bottom) { Rectangle().fill(DS.Palette.stroke).frame(height: 1) }
+    }
+
+    private func rulerLabel(_ t: Double) -> String {
+        let s = Int(t)
+        if hasHalfSecond(t) { return String(format: "%d:%02d.5", s / 60, s % 60) }
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    private func hasHalfSecond(_ t: Double) -> Bool { t - Double(Int(t)) > 0.01 }
+}
+
+// MARK: - Playhead
+
+struct Playhead: View {
+    let height: CGFloat
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Image(systemName: "arrowtriangle.down.fill")
+                .font(.system(size: 11))
+                .foregroundColor(DS.Palette.playhead)
+                .frame(width: 12, height: 10)
+            Rectangle()
+                .fill(DS.Palette.playhead)
+                .frame(width: 2, height: max(0, height - 10))
+        }
+        .shadow(color: DS.Palette.playhead.opacity(0.5), radius: 4)
+    }
+}
+
+// MARK: - Track
 
 struct TrackRowView: View {
     let track: Track
     let pointsPerSecond: CGFloat
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 4).fill(Color(UIColor.secondarySystemGroupedBackground))
-            
-            Text(track.name)
-                .font(.caption2)
-                .bold()
-                .foregroundColor(.gray)
-                .padding(.leading, 4)
-                .offset(y: -20)
-            
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: DS.Radius.s, style: .continuous)
+                .fill(DS.Palette.trackLane)
+
+            HStack(spacing: 4) {
+                Image(systemName: track.type == .video ? "video" : "speaker.wave.2")
+                Text(track.name)
+            }
+            .font(DS.Typo.caption)
+            .foregroundColor(DS.Palette.textTertiary)
+            .padding(.leading, DS.Space.s)
+            .padding(.top, 4)
+
             ForEach(track.clips) { clip in
-                ClipItemView(clip: clip, trackID: track.id, pointsPerSecond: pointsPerSecond)
+                ClipItemView(clip: clip, track: track, pointsPerSecond: pointsPerSecond)
             }
         }
     }
 }
 
+// MARK: - Clip
+
 struct ClipItemView: View {
     @EnvironmentObject var editorState: EditorState
     let clip: Clip
-    let trackID: UUID
+    let track: Track
     let pointsPerSecond: CGFloat
-    
+
     @State private var dragOffset: CGFloat = 0
 
     var body: some View {
-        let width = TimelineEngine.secondsToPoints(seconds: clip.duration, pointsPerSecond: pointsPerSecond)
+        let width = max(TimelineEngine.secondsToPoints(seconds: clip.duration, pointsPerSecond: pointsPerSecond), 10)
         let baseOffset = TimelineEngine.secondsToPoints(seconds: clip.startTime, pointsPerSecond: pointsPerSecond)
         let isSelected = editorState.selectedClipID == clip.id
+        let isVideo = track.type == .video
+        let fill = isVideo
+            ? (isSelected ? DS.Palette.videoClipSelected : DS.Palette.videoClip)
+            : (isSelected ? DS.Palette.audioClipSelected : DS.Palette.audioClip)
 
-        ZStack {
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Color.blue.opacity(0.8) : Color.purple.opacity(0.6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(isSelected ? Color.yellow : Color.clear, lineWidth: 2))
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: DS.Radius.s, style: .continuous)
+                .fill(LinearGradient(colors: [fill, fill.opacity(0.75)], startPoint: .top, endPoint: .bottom))
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.Radius.s, style: .continuous)
+                        .stroke(isSelected ? Color.white : Color.white.opacity(0.12), lineWidth: isSelected ? 2 : 1)
+                )
 
-            Text(clip.name).font(.caption2).foregroundColor(.white).lineLimit(1).padding(.horizontal, 4)
+            HStack(spacing: 4) {
+                if !(clip.effects ?? []).isEmpty {
+                    Image(systemName: "wand.and.stars").font(.system(size: 8, weight: .bold))
+                }
+                Text(clip.name).font(DS.Typo.clip).lineLimit(1)
+                Spacer(minLength: 0)
+                if clip.playbackRate != 1 {
+                    Text(String(format: "%.2gx", clip.playbackRate))
+                        .font(.system(size: 9, weight: .heavy))
+                        .padding(.horizontal, 4)
+                        .background(Capsule().fill(Color.black.opacity(0.35)))
+                }
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 6)
+            .padding(.top, 5)
+            .frame(width: width, alignment: .leading)
 
             if let anim = clip.animation {
                 // Keyframe markers along the bottom of the clip
@@ -136,23 +220,17 @@ struct ClipItemView: View {
                 ForEach(positions, id: \.self) { at in
                     Image(systemName: "diamond.fill")
                         .font(.system(size: 7))
-                        .foregroundColor(.yellow)
-                        .position(x: CGFloat(at) * max(width, 10), y: 46)
+                        .foregroundColor(DS.Palette.keyframe)
+                        .position(x: CGFloat(at) * width, y: DS.Size.trackHeight - 9)
                 }
             }
-            if clip.playbackRate != 1 {
-                Text(String(format: "%.2gx", clip.playbackRate))
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(.orange)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(3)
-            }
         }
-        .frame(width: max(width, 10), height: 52)
+        .frame(width: width, height: DS.Size.trackHeight)
         .offset(x: baseOffset + dragOffset)
+        .shadow(color: isSelected ? fill.opacity(0.5) : .clear, radius: 6)
         .onTapGesture {
             editorState.selectedClipID = clip.id
-            editorState.selectedTrackID = trackID
+            editorState.selectedTrackID = track.id
         }
         .gesture(
             DragGesture()
@@ -166,4 +244,3 @@ struct ClipItemView: View {
         )
     }
 }
-

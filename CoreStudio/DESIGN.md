@@ -15,12 +15,15 @@ only the architecture ideas, re-implemented from scratch in Swift.
 | Edits land on whole frames | `EditorState.snapToFrame` (split, timeline drag) |
 | One command layer that the UI and AI agents both drive | `CommandRegistry` (+ `setClipSpeed`, `setKeyframe`, `clearKeyframes`) |
 
+| Rendering split into a *plan* (what's on screen, no pixels) and a *compositor* (draws it) | `PlaybackEngine` builds `CompositionInstruction`s, `CoreStudioCompositor` draws each frame with Core Image (`FrameRenderer.swift`) |
+| Effects are data, not code | `Effects.swift`: JSON catalogue of Core Image effects; clips store `{effectID, params, enabled}` |
+
+Also: export (`ExportService.swift`) through the same compositor, and a design
+system (`DesignSystem.swift`) that every screen uses.
+
 ## Next (roadmap)
 
-1. **Own renderer** (`AVVideoCompositing` + Core Image): "plan what is on screen
-   at time t, then draw it". Needed for effects, blend modes and smooth keyframes.
-2. **Effects as data**: a catalogue of effects described in JSON (id, parameters,
-   Core Image filter), so adding an effect needs no new Swift code.
-3. **Clip kinds**: titles (text), stills, adjustment layers.
-4. **Exact rational time** at the render boundary for 29.97/59.94 fps material.
-5. **Auto-captions** with Apple's on-device Speech framework.
+1. **Clip kinds**: titles (text), stills, adjustment layers.
+2. **Transitions** (cross dissolve, slide) in the compositor.
+3. **Exact rational time** at the render boundary for 29.97/59.94 fps material.
+4. **Auto-captions** with Apple's on-device Speech framework.
