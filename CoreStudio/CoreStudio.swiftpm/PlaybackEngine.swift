@@ -125,14 +125,23 @@ final class PlaybackEngine: ObservableObject {
         var cutTimes = Set<Double>([0])
         var timelineEnd = 0.0
 
+        // IMPORTANT: an AVAssetTrack does not keep its AVAsset alive. If the asset is freed,
+        // inserting the track fails ("The operation could not be completed"). So every asset
+        // opened during the rebuild is kept here until the rebuild is done.
+        var openAssets: [UUID: AVURLAsset] = [:]
+        var keepAlive: [AVAsset] = []
+
         func sourceTrack(for clip: Clip, _ type: AVMediaType) -> AVAssetTrack? {
             guard let info = assetMap[clip.mediaAssetID] else { return nil }
+            if let asset = openAssets[info.id] { return asset.tracks(withMediaType: type).first }
             let url = docsDirectory.appendingPathComponent(info.relativePath)
             guard FileManager.default.fileExists(atPath: url.path) else {
                 CrashReporter.log("missing media file: \(info.relativePath)")
                 return nil
             }
-            return AVURLAsset(url: url).tracks(withMediaType: type).first
+            let asset = AVURLAsset(url: url)
+            openAssets[info.id] = asset
+            return asset.tracks(withMediaType: type).first
         }
 
         /// Inserts `clip` (optionally extended by `lead` seconds before and `tail` after, for transitions).
@@ -248,8 +257,10 @@ final class PlaybackEngine: ObservableObject {
 
         // A black picture under everything, for the whole timeline: titles and gaps
         // still have frames, and the timeline is as long as its last clip or title.
-        if !placedVideo.isEmpty, timelineEnd > 0.01, let blackURL = BlackVideo.url(),
-           let black = AVURLAsset(url: blackURL).tracks(withMediaType: .video).first,
+        let blackAsset = BlackVideo.url().map { AVURLAsset(url: $0) }
+        if let blackAsset { keepAlive.append(blackAsset) }
+        if !placedVideo.isEmpty, timelineEnd > 0.01,
+           let black = blackAsset?.tracks(withMediaType: .video).first,
            let base = newComposition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) {
             let one = CMTimeRange(start: .zero, duration: CMTime(value: 1, timescale: 1))
             do {
@@ -274,7 +285,7 @@ final class PlaybackEngine: ObservableObject {
         guard !placedVideo.isEmpty, total > 0.01 else {
             self.videoComposition = nil
             install(item, resumeAt: resumeTime)
-            CrashReporter.log("rebuild done (audio only), \(total)s")
+            CrashReporter.log("rebuild done (audio only), \(total)s, \(openAssets.count + keepAlive.count) files")
             return
         }
 
@@ -319,6 +330,6 @@ final class PlaybackEngine: ObservableObject {
         self.videoComposition = videoComposition
         item.videoComposition = videoComposition
         install(item, resumeAt: resumeTime)
-        CrashReporter.log("rebuild done: \(instructions.count) segments, \(total)s")
+        CrashReporter.log("rebuild done: \(instructions.count) segments, \(total)s, \(openAssets.count + keepAlive.count) files")
     }
 }

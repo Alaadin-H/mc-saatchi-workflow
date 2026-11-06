@@ -26,7 +26,10 @@ enum CrashReporter {
             report += "EXCEPTION:\n\(exception)\n\n"
             try? fm.removeItem(at: exceptionURL)
         }
-        if !report.isEmpty || previousSessionDidNotEndCleanly,
+        // Only a real crash (an exception) opens the report. Stopping the app from
+        // Swift Playgrounds also "ends uncleanly", and must not show it.
+        _ = previousSessionDidNotEndCleanly
+        if !report.isEmpty,
            let lastLog = try? String(contentsOf: previousLogURL, encoding: .utf8) {
             report += "LAST ACTIONS BEFORE THE CRASH:\n" + lastLog.split(separator: "\n").suffix(30).joined(separator: "\n")
         }
